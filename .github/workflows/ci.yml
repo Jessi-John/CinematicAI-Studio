@@ -383,6 +383,7 @@ jobs:
           MISTRAL_API_KEY: test-mistral-api-key-not-for-production
           NODE_ENV: test
           E2E_TEST: true
+          STORY_TEST_MODE: canned
           PORT: "34567"
       - name: Start worker
         run: cd backend && node dist/queue/workers/run-worker.js &
@@ -396,6 +397,7 @@ jobs:
           MISTRAL_API_KEY: test-mistral-api-key-not-for-production
           NODE_ENV: test
           E2E_TEST: true
+          STORY_TEST_MODE: canned
       - name: Start frontend server
         # H25: Next standalone output deliberately excludes .next/static and
         # public/ (the repo's own Dockerfile copies them explicitly). Without
