@@ -61,14 +61,17 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # H6 FIX: standard-version tags WITH the default `v` prefix (so the
-          # release tag is vX.Y.Z) but writes the CHANGELOG header as `## [X.Y.Z]`
-          # (bare version, NO v). Keep VERSION (bare) for the CHANGELOG lookup
-          # and TAG (v-prefixed) for the git tag/release. The previous command
-          # searched the CHANGELOG for `## [vX.Y.Z]`, which never matched, so
-          # every release shipped with empty notes.
+          # standard-version writes sections as "### X.Y.Z (date)" while older
+          # manual entries use "## [X.Y.Z] - date"; match both and stop at the
+          # next version heading (subsection headings like "### Bug Fixes" are
+          # kept).
           VERSION="${{ steps.version.outputs.next }}"
           TAG="v${VERSION}"
+          NOTES=$(awk -v v="$VERSION" '
+            index($0, "### " v) == 1 || index($0, "## [" v "]") == 1 { found=1; next }
+            found && (/^## \[/ || /^### [0-9]+\.[0-9]+\.[0-9]+/) { exit }
+            found { print }
+          ' CHANGELOG.md | sed '/./,$!d')
           gh release create "$TAG" \
             --title "$TAG" \
-            --notes "$(sed -n '/^## \['"$VERSION"'\]/,/^## \[/p' CHANGELOG.md | head -n -2 | tail -n +3)"
+            --notes "$NOTES"

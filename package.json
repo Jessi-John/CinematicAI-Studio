@@ -19,7 +19,7 @@
     "prepare": "husky || true",
     "secrets:check": "bash scripts/check-secrets.sh",
     "ci:local": "node scripts/ci-local.js",
-    "release": "standard-version && node scripts/sync-version.mjs && git add backend/package.json && git commit --amend --no-edit",
+    "release": "standard-version --skip.tag && node scripts/sync-version.mjs && git add backend/package.json backend/package-lock.json && git commit --amend --no-edit && git tag -a \"v$(node -p 'require(\"./package.json\").version')\" -m \"chore(release)\"",
     "release:dry-run": "standard-version --dry-run"
   },
   "standard-version": {
