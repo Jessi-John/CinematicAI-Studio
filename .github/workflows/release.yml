@@ -52,7 +52,9 @@ jobs:
         if: steps.version.outputs.next != ''
         run: |
           npm run release
-          git push --follow-tags origin main
+          # Checkout is on a detached HEAD at the CI-validated SHA, so there is
+          # no local `main` ref to push; push HEAD to main instead.
+          git push --follow-tags origin HEAD:main
 
       - name: Publish GitHub Release
         if: steps.version.outputs.next != ''
