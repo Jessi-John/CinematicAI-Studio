@@ -154,7 +154,7 @@ test.describe('Full Story Generation Flow', () => {
 
     // Mock the SSE endpoint to send a 'complete' event with the mock storyId,
     // then the story detail endpoint to return a valid story
-    await page.route(`**/api/stories/generate/${mockJobId}/events`, async route => {
+    await page.route(new RegExp(`/api/stories/generate/${mockJobId}/events`), async route => {
       await route.fulfill({
         status: 200,
         contentType: 'text/event-stream',
@@ -273,7 +273,7 @@ test.describe('Full Story Generation Flow', () => {
     });
 
     // Mock the SSE endpoint to deliver progress events immediately.
-    await page.route(`**/api/stories/generate/${mockJobId}/events`, async route => {
+    await page.route(new RegExp(`/api/stories/generate/${mockJobId}/events`), async route => {
       await route.fulfill({
         status: 200,
         contentType: 'text/event-stream',
@@ -377,7 +377,7 @@ test.describe('Story Detail Page', () => {
       }
     });
 
-    await page.route(`**/api/stories/generate/${mockJobId}/events`, async route => {
+    await page.route(new RegExp(`/api/stories/generate/${mockJobId}/events`), async route => {
       await route.fulfill({
         status: 200,
         contentType: 'text/event-stream',
