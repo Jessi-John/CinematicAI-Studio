@@ -544,14 +544,15 @@ test.describe('Scene editing with optimistic locking', () => {
       );
       if (statusRes.ok()) {
         const statusBody = (await statusRes.json()) as {
-          state?: string;
-          data?: { storyId?: string };
+          data?: { state?: string; data?: { storyId?: string } };
         };
-        if (statusBody.state === 'completed' && statusBody.data?.storyId) {
-          storyId = statusBody.data.storyId;
+        if (statusBody.data?.state === 'completed' && statusBody.data.data?.storyId) {
+          storyId = statusBody.data.data.storyId;
           break;
         }
-        if (statusBody.state === 'failed') break;
+        if (statusBody.data?.state === 'failed') {
+          throw new Error(`Story generation failed: ${JSON.stringify(statusBody)}`);
+        }
       }
       await new Promise((r) => setTimeout(r, 2000));
     }
