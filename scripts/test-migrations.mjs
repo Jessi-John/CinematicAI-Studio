@@ -44,8 +44,25 @@ try {
   // `prisma migrate diff` compares the shadow DB (from migrations) with
   // the Prisma schema. If they differ, a migration is missing or the
   // schema.prisma has un-migrated changes.
+  //
+  // Raw-SQL-only objects are tolerated: the Prisma DSL cannot express
+  // operator classes, so `stories_title_trgm_idx` (GIN, gin_trgm_ops) is
+  // created by migrations for trigram search and is intentionally absent
+  // from schema.prisma.
   console.log('\n=== Verifying schema drift ===');
-  run(`npx prisma migrate diff --from-migrations prisma/migrations --to-schema-datamodel prisma/schema.prisma --shadow-database-url '${SHADOW_DATABASE_URL}' --exit-code`);
+  const diff = execSync(
+    `npx prisma migrate diff --from-migrations prisma/migrations --to-schema-datamodel prisma/schema.prisma --shadow-database-url '${SHADOW_DATABASE_URL}' --script`,
+    { cwd: BACKEND_DIR, encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'] },
+  );
+  const unexplained = diff
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line && !line.startsWith('--'))
+    .filter((line) => line !== 'DROP INDEX "stories_title_trgm_idx";');
+  if (unexplained.length > 0) {
+    console.error(diff);
+    throw new Error(`Schema drift detected (${unexplained.length} statement(s)): ${unexplained.join(' ')}`);
+  }
 
   console.log('\n=== Migration integrity check PASSED ===');
 } catch (error) {

@@ -294,6 +294,9 @@ jobs:
         if: github.ref == 'refs/heads/main'
         with:
           name: frontend-next
+          # upload-artifact v4 excludes dotfiles by default; .next is a hidden
+          # directory, so the e2e job would otherwise receive only public/.
+          include-hidden-files: true
           path: |
             .next/
             public/
