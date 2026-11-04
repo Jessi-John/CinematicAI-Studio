@@ -1,0 +1,183 @@
+name: Security Scan
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: '0 0 * * 0'  # Weekly
+  workflow_dispatch:
+
+jobs:
+  zap-scan:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Create Docker secrets for Docker Compose
+        run: |
+          # LOW #70: docker-compose.yml mounts sensitive values as Docker secrets
+          # instead of env vars. Create the secrets/ directory with test values
+          # so the stack can start in CI without a gitignored .env file.
+          mkdir -p secrets
+          write_secret() { printf '%s' "$2" > "secrets/$1"; }
+          write_secret database_url          'postgresql://postgres:test-pg-password-not-for-production@postgres:5432/cinematicai?schema=public'
+          write_secret redis_url             'redis://:test-redis-password-not-for-production@redis:6379'
+          write_secret api_secret            'test-api-secret-not-for-production-32chars'
+          write_secret jwt_secret            'test-jwt-secret-not-for-production-32chars'
+          write_secret admin_api_key         'test-admin-api-key-not-for-production'
+          write_secret postgres_password     'test-pg-password-not-for-production'
+          write_secret redis_password        'test-redis-password-not-for-production'
+          write_secret mistral_api_key       'test-mistral-api-key-not-for-prod'
+          write_secret kimi_api_key          'test-kimi-api-key-not-for-production'
+          write_secret grafana_admin_password.txt 'test-grafana-admin-password-not-for-production'
+          write_secret alert_receiver_token  'test-alert-receiver-token-not-for-production'
+          write_secret loki_tenant_id        'test-loki-tenant-id-not-for-production'
+
+      - name: Start full stack
+        run: docker compose up -d
+
+      - name: Wait for backend health
+        run: |
+          for i in $(seq 1 30); do
+            curl -sf http://localhost:34567/api/health && echo "Backend healthy" && exit 0
+            sleep 2
+          done
+          echo "Backend never became healthy"
+          exit 1
+
+      - name: Run ZAP baseline scan
+        uses: zaproxy/action-baseline@906a3c93ffde4864839d31a93daadcbd2737b4da
+        with:
+          target: 'http://localhost:34567'
+          rules_file_name: '.zap/rules.tsv'
+          cmd_options: '-a'
+
+      - name: Upload ZAP baseline report
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: zap-baseline-report
+          path: zap_baseline_report.html
+
+      - name: Generate OpenAPI spec
+        run: |
+          if ! curl -sf -H 'Authorization: Bearer test-admin-api-key-not-for-production' http://localhost:34567/api/docs -o openapi.json; then
+            echo "ERROR: Failed to fetch OpenAPI spec from backend — API scan would be empty"
+            exit 1
+          fi
+
+      - name: Run ZAP API scan
+        uses: zaproxy/action-api-scan@f9cfe0c8eb3a665265f69ff7e200aa68c4822521
+        with:
+          target: 'http://localhost:34567'
+          api_file: openapi.json
+          rules_file_name: '.zap/rules.tsv'
+
+      - name: Upload ZAP API report
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: zap-api-report
+          path: zap_api_report.html
+
+  trivy-scan:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Build backend image
+        run: docker build -t cinematicai-backend:latest ./backend
+
+      - name: Build frontend image
+        run: docker build -t cinematicai-frontend:latest .
+
+      - name: Run Trivy vulnerability scanner on backend image
+        uses: aquasecurity/trivy-action@6c175e9c4083fbb618cc6da5b37f66f57f96d0f8
+        with:
+          image-ref: 'cinematicai-backend:latest'
+          format: 'sarif'
+          output: 'trivy-backend-results.sarif'
+
+      - name: Run Trivy vulnerability scanner on frontend image
+        uses: aquasecurity/trivy-action@6c175e9c4083fbb618cc6da5b37f66f57f96d0f8
+        with:
+          image-ref: 'cinematicai-frontend:latest'
+          format: 'sarif'
+          output: 'trivy-frontend-results.sarif'
+
+      - name: Upload Trivy backend scan results
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: trivy-backend-results
+          path: trivy-backend-results.sarif
+
+      - name: Upload Trivy frontend scan results
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: trivy-frontend-results
+          path: trivy-frontend-results.sarif
+
+  sbom-provenance:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install root dependencies
+        run: npm ci --frozen-lockfile
+
+      - name: Generate frontend npm SBOM (SPDX)
+        run: npm sbom --sbom-format=spdx --package-lock-only > frontend-sbom.spdx.json
+
+      - name: Install backend dependencies
+        working-directory: ./backend
+        run: npm ci --frozen-lockfile
+
+      - name: Generate backend npm SBOM (SPDX)
+        working-directory: ./backend
+        run: npm sbom --sbom-format=spdx --package-lock-only > ../backend-sbom.spdx.json
+
+      - name: Build backend image with SBOM + provenance
+        id: build-backend
+        run: |
+          docker buildx build \
+            --sbom=true \
+            --provenance=true \
+            -t cinematicai-backend:latest \
+            -o type=docker,dest=cinematicai-backend.tar \
+            ./backend
+          echo "tar=cinematicai-backend.tar" >> $GITHUB_OUTPUT
+
+      - name: Build frontend image with SBOM + provenance
+        id: build-frontend
+        run: |
+          docker buildx build \
+            --sbom=true \
+            --provenance=true \
+            -t cinematicai-frontend:latest \
+            -o type=docker,dest=cinematicai-frontend.tar \
+            .
+          echo "tar=cinematicai-frontend.tar" >> $GITHUB_OUTPUT
+
+      - name: Upload SBOM artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: sboms
+          path: |
+            frontend-sbom.spdx.json
+            backend-sbom.spdx.json
+
+      - name: Upload image artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: image-tars
+          path: |
+            cinematicai-backend.tar
+            cinematicai-frontend.tar

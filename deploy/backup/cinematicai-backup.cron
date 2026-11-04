@@ -1,0 +1,28 @@
+# Cron job for daily CinematicAI backups.
+# Installed by:
+#   sudo cp deploy/backup/cinematicai-backup.cron /etc/cron.d/cinematicai-backup
+#   sudo chmod 644 /etc/cron.d/cinematicai-backup
+#
+# Runs at 03:00 UTC daily. The scripts write their own logs to
+# /var/backups/cinematicai/{postgres,redis}/backup.log.
+#
+# Environment variables set here are read by the backup scripts.
+# Credentials are sourced from Docker secrets first, then from
+# /etc/cinematicai/.env when not explicitly set below.
+SHELL=/bin/bash
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+# M1: BACKUP_DIR intentionally NOT set here — the scripts' own per-service
+# defaults (/var/backups/cinematicai/{postgres,redis}) keep dumps and logs in
+# separate directories. A shared override flattened both services' dumps AND
+# both logs into one directory.
+RETENTION_DAYS=30
+PG_CONTAINER=youtube-postgres-1
+REDIS_CONTAINER=youtube-redis-1
+ENV_FILE=/etc/cinematicai/.env
+
+# m h dom mon dow user  command
+# C4 FIX: run the two backups as INDEPENDENT cron entries (previously chained
+# with `&&`, so a postgres failure suppressed the redis backup entirely). Each
+# job now runs on its own schedule and fails independently.
+0 3 * * *   root    /usr/local/bin/backup-postgres.sh >> /var/log/cinematicai-backup.log 2>&1
+30 3 * * *  root    /usr/local/bin/backup-redis.sh >> /var/log/cinematicai-backup.log 2>&1

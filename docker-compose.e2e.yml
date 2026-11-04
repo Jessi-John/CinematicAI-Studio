@@ -1,0 +1,28 @@
+# E2E test override — sets E2E_TEST=true and STORY_TEST_MODE=canned for
+# backend and worker. Included by npm run test:e2e via
+# `-f docker-compose.yml -f docker-compose.e2e.yml`. NOT used in normal
+# development or production operation.
+#
+# BOTH vars are SEC-CRITICAL:
+#   E2E_TEST=true     — bypasses auth rate limiters (unlimited login attempts)
+#   STORY_TEST_MODE=canned — uses deterministic canned AI responses
+# They must NEVER be in docker-compose.yml's shared-env because shell env
+# var substitution can leak them into normal operation.
+#
+# ALLOW_E2E_IN_PRODUCTION=true is REQUIRED here: the base docker-compose.yml
+# runs the backend/worker with NODE_ENV=production, and every E2E/canned bypass
+# is gated on NODE_ENV !== production (see backend/src/config/env.ts). Without
+# this explicit opt-in the E2E stack would run with the bypasses disabled and
+# the suite would fail. This var is scoped to the e2e override only and must
+# never appear in docker-compose.yml or any production environment file.
+services:
+  backend:
+    environment:
+      E2E_TEST: "true"
+      STORY_TEST_MODE: canned
+      ALLOW_E2E_IN_PRODUCTION: "true"
+  worker:
+    environment:
+      E2E_TEST: "true"
+      STORY_TEST_MODE: canned
+      ALLOW_E2E_IN_PRODUCTION: "true"

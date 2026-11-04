@@ -1,0 +1,327 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Story {
+  id                     String          @id @default(cuid())
+  title                  String
+  genre                  String
+  seed                   String?
+  // M32: Deduplication key — abstracts the DB unique constraint away from the
+  // user-visible seed. Defaults to seed for normal inserts. When forceNew=true,
+  // a unique nonce is appended so the (genre, deduplicationKey) partial unique
+  // index allows intentional duplicates while still blocking accidental exact
+  // duplicates (the original TOCTOU protection).
+  deduplicationKey       String?         @map("deduplicationKey")
+  theme                  String?
+  status                 String          @default("draft")
+  createdAt              DateTime        @default(now())
+  updatedAt              DateTime        @updatedAt
+  targetAudience         String?
+  // Default [] since 20260719000000: when the embedding provider is unavailable
+  // the pipeline intentionally persists the story with an empty embedding and
+  // the background-embedding worker backfills it later. Prisma rejects null for
+  // non-nullable list fields (surfacing as the confusing "Unknown argument
+  // `user`" unchecked-input error), and the HNSW index cannot cast a 0-dim
+  // array — so the index is partial (WHERE array_length = 1024) and empty
+  // embeddings are simply excluded from it. All similarity queries already
+  // filter out empty embeddings.
+  embedding              Float[]          @default([])
+  qualityScore           Int?
+  qualityGrade           String?
+  humanizationScore      Int?
+  monetizationScore      Int?
+  viralityScore          Int?
+  retentionScore         Int?
+  hookStrength           Int?
+  qualityRecommendations String[]
+  qualityIssues          String[]
+  algorithmTips          String[]        @default([])
+  alternateTitles        String[]
+  // M30: Cached counts populated by buildStoryCreateData from in-memory
+  // episode/scene arrays at save time. The list view (LIST_SELECT) reads
+  // these scalars instead of loading the full episodes/scenes tree, which
+  // would multiply row count by 10-50x per story. The convertStory fallback
+  // uses the scalars when episodes[] is not loaded (e.g. list view).
+  episodeCount           Int             @default(0) @map("episodeCount")
+  sceneCount             Int             @default(0) @map("sceneCount")
+  // M22: Orphaned columns from earlier migrations. These exist in the DB but
+  // were not in the schema, causing prisma db push/migrate diff to attempt
+  // dropping them. Declared here as optional/unused to prevent drift.
+  // The YouTube SEO fields (youtubeTitle, youtubeDescription, youtubeTags,
+  // thumbnailSuggestion, hookScript, viralPotential, recommendedDuration)
+  // were migrated to the YouTubeSEO table and are vestigial on Story.
+  isTemplate             Boolean?        @default(false) @map("isTemplate")
+  storyArcType           String?         @map("storyArcType")
+  templateId             String?         @map("templateId")
+  plotStructure          String?         @map("plotStructure")
+  youtubeTitle           String?         @map("youtubeTitle")
+  youtubeDescription     String?         @map("youtubeDescription")
+  youtubeTags            String[]        @default([]) @map("youtubeTags")
+  thumbnailSuggestion    String?         @map("thumbnailSuggestion")
+  hookScript             String?         @map("hookScript")
+  viralPotential         Int?            @map("viralPotential")
+  recommendedDuration    String?         @map("recommendedDuration")
+  // PERF-006 NOTE: embedding (Float[]) has a pgvector HNSW index defined in
+  // migrations/20260528000000_add_pgvector_and_hnsw.sql using:
+  //   CREATE INDEX ... USING hnsw ((embedding::vector(1024)) vector_cosine_ops)
+  // This index cannot be expressed in Prisma schema DSL. Do NOT run `prisma db push`
+  // without also applying the migration that creates this index.
+  seedStoryId            String?
+  // PERF-007: Self-referential seed: a story may be derived from another story's concept.
+  // FK is optional because seed stories may be deleted (SET NULL).
+  seedStory              Story?          @relation("StorySeeds", fields: [seedStoryId], references: [id], onDelete: SetNull)
+  seedStories            Story[]         @relation("StorySeeds")
+  characters             Character[]
+  environments           Environment[]
+  episodes               Episode[]
+  generationLogs         GenerationLog[]
+  youtubeSeo             YouTubeSEO?
+  userId                 String          @default("system")
+  // M25: FK constraint to users is created in migration 20260627000000.
+  // The @relation is declared here so Prisma can do nested includes.
+  // onDelete: Restrict enforces that a user cannot be deleted while they
+  // still own stories, preserving the non-null ownership invariant.
+  user                   User            @relation(fields: [userId], references: [id], onDelete: Restrict)
+
+  // M23: The partial unique index on (genre, seed) WHERE seed IS NOT NULL is
+  // created via raw SQL in migrations/20260611000000_add_genre_seed_unique_constraint.sql.
+  // Prisma DSL cannot express partial unique indexes — declaring @@unique([genre, seed])
+  // would generate a FULL unique constraint that rejects NULL-seed stories. The
+  // partial index is maintained manually in the migration SQL. Do NOT add
+  // @@unique([genre, seed]) back here without also making it partial.
+  @@index([genre])
+  @@index([createdAt])
+  @@index([status])
+  @@index([userId])
+  @@map("stories")
+}
+
+model YouTubeSEO {
+  id                   String   @id @default(cuid())
+  title                String
+  description          String
+  tags                 String[]
+  thumbnailSuggestions String[]
+  videoTemplate        String   @default("15s hook → 45s story → 5s CTA")
+  hookScript           String
+  algorithmBoostTips   String[]
+  viralPotential       Int      @default(75)
+  recommendedDuration  String   @default("45-60 seconds")
+  targetAudience       String   @default("Anime and cozy fantasy fans")
+  trendingKeywords     String[]
+  ctaScript            String   @default("Like and subscribe!")
+  updatedAt            DateTime @updatedAt
+  storyId              String   @unique
+  story                Story    @relation(fields: [storyId], references: [id], onDelete: Cascade)
+
+  @@map("youtube_seo")
+}
+
+model Episode {
+  id               String   @id @default(cuid())
+  number           Int
+  title            String
+  synopsis         String
+  hook             String
+  cliffhanger      String
+  duration         Int      @default(50)
+  version          Int      @default(0)
+  updatedAt        DateTime @updatedAt
+  voiceoverScript  String?
+  voiceoverText    String?
+  musicSuggestions String[]
+  soundDesign      String[]
+  storyId          String
+  story            Story    @relation(fields: [storyId], references: [id], onDelete: Cascade)
+  scenes           Scene[]
+  generationLogs   GenerationLog[] @relation("EpisodeGenerationLogs")
+
+  @@unique([storyId, number])
+  @@map("episodes")
+}
+
+model Scene {
+  id                 String   @id @default(cuid())
+  number             Int
+  duration           Int      @default(15)
+  version            Int      @default(0)
+  narrationText      String
+  narrationEmotion   String?
+  narrationTiming    Json?
+  voiceoverNotes     String?
+  imagePromptContent String
+  imagePromptVersion Int      @default(1)
+  imagePromptCreatedAt DateTime? @default(now())
+  imageModel         String?
+  videoPromptContent String
+  videoPromptVersion Int      @default(1)
+  videoPromptCreatedAt DateTime? @default(now())
+  videoModel         String?
+  cameraType         String   @default("static")
+  cameraMovement     String
+  cameraAngle        String   @default("medium")
+  cameraLens         String   @default("standard")
+  emotionalIntensity Int      @default(5)
+  transitionType     String   @default("cut")
+  characterState     Json
+  environmentState   Json
+  visualNotes        String?
+  audioNotes         String?
+  episodeId          String
+  // M1: Denormalized story id (maintained by the app via nested create) so the
+  // decrement_story_scene_count trigger does not depend on the episodes row,
+  // which is already cascade-deleted in the same statement.
+  storyId            String
+  updatedAt          DateTime @updatedAt
+  episode            Episode  @relation(fields: [episodeId], references: [id], onDelete: Cascade)
+  generationLogs     GenerationLog[] @relation("SceneGenerationLogs")
+
+  @@unique([episodeId, number])
+  @@index([storyId])
+  @@map("scenes")
+}
+
+model Character {
+  id                 String   @id @default(cuid())
+  name               String
+  description        String
+  appearance         String
+  personality        String
+  role               String
+  speechPatterns     String?
+  clothing           String?
+  facialFeatures     String?
+  emotions           String[]
+  relationships      Json?
+  catchphrases       String[]
+  physicalMannerisms String?
+  // M31: Character gender. Populated by buildStoryCreateData from the
+  // CharacterBible interface (returned by Stage 3). Drives pronoun
+  // consistency in every scene the character narrates. Defaults to
+  // 'neutral' so existing character rows continue to work without a
+  // backfill (and "they" never misgenders a character).
+  gender             String   @default("neutral") @map("gender")
+  // M22: Orphaned column from initial migration — declared to prevent drift.
+  arc                String?  @map("arc")
+  updatedAt          DateTime @updatedAt
+  storyId            String
+  story              Story    @relation(fields: [storyId], references: [id], onDelete: Cascade)
+
+  @@index([storyId])
+  @@map("characters")
+}
+
+model Environment {
+  id            String   @id @default(cuid())
+  name          String
+  description   String
+  type          String
+  timeOfDay     String
+  weather       String
+  mood          String
+  keyFeatures   String[]
+  colorPalette  String[]
+  lightingSetup Json
+  updatedAt     DateTime @updatedAt
+  storyId       String
+  story         Story    @relation(fields: [storyId], references: [id], onDelete: Cascade)
+
+  @@index([storyId])
+  @@map("environments")
+}
+
+model GenerationLog {
+  id        String   @id @default(cuid())
+  action    String
+  details   Json
+  storyId   String?
+  episodeId String?
+  sceneId   String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  story     Story?   @relation(fields: [storyId], references: [id], onDelete: SetNull)
+  // Fix: Add relations for episodeId and sceneId. Previously these columns had
+  // DB indexes but no Prisma @relation, meaning:
+  // 1. No FK constraints — orphaned rows accumulated silently
+  // 2. No cascading deletes when episodes/scenes are deleted
+  // 3. Prisma couldn't do nested writes or includes on these relations
+  //
+  // NOTE: These relations use onDelete: SetNull to match the FK constraint
+  // behavior. Existing migrations may use different cascade rules; run
+  // `prisma migrate dev` to reconcile.
+  episode Episode? @relation("EpisodeGenerationLogs", fields: [episodeId], references: [id], onDelete: SetNull)
+  scene   Scene?   @relation("SceneGenerationLogs", fields: [sceneId], references: [id], onDelete: SetNull)
+
+  @@index([storyId, createdAt])
+  @@index([episodeId])
+  @@index([sceneId])
+  @@map("generation_logs")
+}
+
+model UserSettings {
+  id        String   @id @default(cuid())
+  key       String
+  value     String
+  type      String   @default("string")
+  // M13: userId defaults to 'global' for backward compatibility with existing
+  // settings that were previously system-wide. Making it non-nullable ensures
+  // the compound unique constraint (userId, key) works correctly with Prisma's
+  // findUnique — nullable fields in compound unique indexes don't work because
+  // SQL NULLs are never equal.
+  userId    String   @default("global")
+  user      User?    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  updatedAt DateTime @updatedAt
+
+  // M13: Changed from @unique on key alone to @@unique([userId, key]) so
+  // settings are scoped per-user. Previously all "user" settings were global
+  // (shared across all users) because the unique constraint was on key alone.
+  @@unique([userId, key])
+  @@index([userId])
+  @@map("user_settings")
+}
+
+model SystemSettings {
+  id        String   @id @default(cuid())
+  key       String   @unique
+  value     String
+  updatedAt DateTime @updatedAt
+
+  @@map("system_settings")
+}
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  action     String
+  entityType String
+  entityId   String
+  before     Json?
+  after      Json?
+  ipAddress  String?
+  userAgent  String?
+  userId     String?
+  createdAt  DateTime @default(now())
+
+  @@index([entityType, entityId])
+  @@index([userId])
+  @@index([createdAt])
+  @@map("audit_logs")
+}
+
+model User {
+  id           String   @id @default(cuid())
+  username     String   @unique
+  passwordHash String
+  role         String   @default("user")
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  stories      Story[]
+  userSettings UserSettings[]
+
+  @@map("users")
+}

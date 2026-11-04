@@ -1,0 +1,31 @@
+# Default owners for everything in the repo.
+# IMPORTANT: Replace @maintainers with a real GitHub team before enabling
+# branch protection; placeholder teams do not enforce review.
+* @maintainers
+
+# Infrastructure and deployment
+/docker-compose*.yml @maintainers
+/Dockerfile @maintainers
+/backend/Dockerfile @maintainers
+/deploy/ @maintainers
+/prometheus/ @maintainers
+/.github/ @maintainers
+
+# Backend API and worker
+/backend/src/ @maintainers
+/backend/prisma/ @maintainers
+
+# Frontend application
+/app/ @maintainers
+/components/ @maintainers
+/lib/ @maintainers
+/hooks/ @maintainers
+
+# Documentation
+*.md @maintainers
+/docs/ @maintainers
+
+# These files enforce test-quality and architecture invariants.
+# Changes to them can silently disable guardrails, so they require review.
+backend/src/test-quality/ @maintainers
+eslint-plugins/ @maintainers

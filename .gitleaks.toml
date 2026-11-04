@@ -1,0 +1,25 @@
+# gitleaks configuration — runs on every commit via .husky/pre-commit.
+# Catches any committed secret that matches a known provider pattern or a
+# generic high-entropy string. This is the last line of defence for the
+# committed .env.backup file (see secret-scanning below).
+
+title = "CinematicAI secret scanning"
+
+[extend]
+# Use the built-in ruleset as a starting point.
+useDefault = true
+
+# We allow docs/ to contain example API keys (e.g. README examples). All
+# other paths must not contain secrets.
+[[allowlists]]
+description = "Allow example keys in documentation"
+paths = [
+  '''(?i).*\.example$''',
+  # WARNING: Documentation files are NOT exempt — secrets in markdown will be caught.
+  # The allowlist remains restricted to .example files (template patterns only).
+  # Do NOT add .md or README patterns here; they would bypass scanning.
+]
+
+# We deliberately do NOT allow .env, .env.*, or .env.backup. gitleaks will
+# block those files. The pre-commit hook in .husky/pre-commit additionally
+# checks that no real value is in .env.

@@ -1,0 +1,578 @@
+# ─── Shared environment variables ──────────────────────────────────────────
+# Consolidated using YAML anchors to eliminate duplication between the
+# backend and worker services. Both use the same API keys, database
+# connection, Redis URL, and job configuration.
+x-shared-env: &shared-env
+  NODE_ENV: production
+  # LOCAL DEV HTTP: The local Docker Compose stack does not terminate TLS,
+  # so browsers withhold Secure cookies over plain HTTP and the backend's
+  # JWT transport check rejects non-TLS requests. This flag explicitly opts
+  # the local stack into insecure HTTP for cookie/CSRF/JWT auth. It is
+  # intentionally NOT set in docker-compose.prod.yml.
+  ALLOW_INSECURE_LOCAL_HTTP: "true"
+  # LOW #70: DATABASE_URL, REDIS_URL, API_SECRET, JWT_SECRET, ADMIN_API_KEY,
+  # and AI provider keys are mounted as Docker secrets instead of being passed
+  # as environment variables. The backend/worker entrypoint reads them from
+  # /run/secrets/* before starting Node.js.
+  # ─── AI Provider Order ───
+  # Mistral AI — primary for ALL story-generation stages + embeddings
+  # Kimi K3 — fallback for blueprints, bibles, episodes, scenes, dialogue, SEO
+  MISTRAL_BASE_URL: https://api.mistral.ai/v1
+  MISTRAL_MODEL: mistral-medium-2508
+  KIMI_BASE_URL: https://api.kimi.com/coding/v1/chat/completions
+  KIMI_MODEL: k3
+  LOG_LEVEL: info
+  OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318/v1/traces
+  WORKER_CONCURRENCY: "2"
+  WORKER_RATE_LIMIT_MAX: "10"
+  WORKER_RATE_LIMIT_WINDOW_MS: "60000"
+  DB_CONNECTION_LIMIT: "10"
+  CANNED_DEBUG: ${CANNED_DEBUG:-}
+
+networks:
+  default:
+    driver: bridge
+    # Dynamic IPs — ioredis now uses fresh DNS lookups on every connect
+    # (see lib/create-redis.ts), so Docker's embedded DNS cache is always
+    # bypassed. This enables `docker compose up --scale` for horizontal
+    # scaling. All `ipv4_address` entries have been removed.
+  internal:
+    driver: bridge
+    internal: true
+    # Data-plane network: backend/worker <-> postgres/redis. Marked internal
+    # so these services cannot be reached from the default (public/monitoring)
+    # network and have no outbound route. A compromised frontend or monitoring
+    # service cannot reach the database directly.
+
+x-app-hardening: &app-hardening
+  security_opt:
+    - no-new-privileges:true
+  cap_drop:
+    - ALL
+
+services:
+  postgres:
+    # pgvector/pgvector:pg16 provides PostgreSQL 16 with the pgvector
+    # extension pre-installed. This image properly respects POSTGRES_PASSWORD
+    # for the postgres superuser role, unlike supabase/postgres which stores
+    # a different password internally and breaks remote SCRAM auth.
+    # LOW #66: Pin image by digest for reproducible builds.
+    image: pgvector/pgvector:pg16@sha256:8a5f16c3c438d5654cb6f438a7866da05cc76bc44e330b5ea246a94516d6d370
+    restart: unless-stopped
+    stop_grace_period: 60s
+    networks:
+      internal: {}
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_DB: cinematicai
+      # LOW #70: Password is mounted as a Docker secret.
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+    secrets:
+      - postgres_password
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      # LOW #70: Read the password from the Docker secret file.
+      test: ["CMD-SHELL", "PGPASSWORD=$$(cat /run/secrets/postgres_password) pg_isready -U postgres && PGPASSWORD=$$(cat /run/secrets/postgres_password) psql -h localhost -U postgres -c 'SELECT 1' || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    ports:
+      - "127.0.0.1:15432:5432"
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 128M
+
+  redis:
+    # LOW #66: Pin image by digest for reproducible builds.
+    image: redis:7-alpine@sha256:b1addbe72465a718643cff9e60a58e6df1841e29d6d7d60c9a85d8d72f08d1a7
+    restart: unless-stopped
+    stop_grace_period: 60s
+    networks:
+      internal: {}
+    # LOW #70: Redis password is mounted as a Docker secret. The command and
+    # healthcheck read it from /run/secrets/redis_password at runtime.
+    # HIGH-3: Set maxmemory + maxmemory-policy so prometheus's
+    # RedisMemoryHigh alert can actually evaluate (redis_memory_max_bytes
+    # is 0 when Redis has no configured limit, making the guarded alert
+    # silently never fire even when Redis is about to OOM). allkeys-lru
+    # eviction maximises hit rate for the token-budget + blacklist cache
+    # and the BullMQ queues without data loss (queues are persisted to AOF).
+    # Override REDIS_MAXMEMORY via .env if a different cap is needed.
+    # M71: AOF repair guard — run redis-check-aof --fix before startup so an
+    # unclean shutdown does not leave Redis crash-looping on a torn AOF tail.
+    command: sh -c 'REDIS_PASSWORD="$$(cat /run/secrets/redis_password)" && sh /usr/local/bin/redis-aof-guard.sh --appendonly yes --requirepass "$$REDIS_PASSWORD" --maxmemory "$${REDIS_MAXMEMORY:-1gb}" --maxmemory-policy allkeys-lru'
+    secrets:
+      - redis_password
+    volumes:
+      - redis_data:/data
+      - ./deploy/redis/redis-aof-guard.sh:/usr/local/bin/redis-aof-guard.sh:ro
+    healthcheck:
+      test: ["CMD", "sh", "-c", "REDISCLI_AUTH=$$(cat /run/secrets/redis_password) redis-cli ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    ports:
+      - "127.0.0.1:6379:6379"
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+        reservations:
+          cpus: '0.1'
+          memory: 64M
+
+  jaeger:
+    # LOW #66: Pin image by digest for reproducible builds.
+    image: jaegertracing/all-in-one:1.50@sha256:93ff440dbda3f3654e54f21a8fe71fc7c4a85f75a54e840006351b4dffbec6a5
+    restart: unless-stopped
+    stop_grace_period: 60s
+    # Jaeger all-in-one bundles query, collector, and agent in one process.
+    # Production minimum is 2GB memory and 1 CPU to avoid OOM under moderate
+    # trace volume. For high-volume production, split into separate
+    # query/collector components instead of all-in-one.
+    networks:
+      default: {}
+    # Fix: Only expose Jaeger UI port to host; OTLP port stays internal to Docker
+    # network. Previously OTLP port 4318 was exposed to host, allowing any process
+    # on the host to send traces without authentication.
+    ports:
+      - "127.0.0.1:16686:16686"  # Jaeger UI (host-accessible for debugging)
+    environment:
+      - COLLECTOR_OTLP_ENABLED=true
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 2048M
+        reservations:
+          cpus: '0.25'
+          memory: 256M
+
+  # Migration init container. Runs Prisma migrations once before backend/worker
+  # start, preventing race conditions between multiple backend replicas.
+  migrations:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: "no"
+    entrypoint: ["./migrate-entrypoint.sh"]
+    command: ["true"]
+    networks:
+      default: {}
+      internal: {}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+    secrets:
+      - database_url
+    <<: *app-hardening
+    deploy:
+      restart_policy:
+        condition: none
+      resources:
+        limits:
+          cpus: '0.25'
+          memory: 256M
+        reservations:
+          cpus: '0.05'
+          memory: 64M
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    stop_grace_period: 60s
+    networks:
+      default: {}
+      internal: {}
+    # LOW #70: Sensitive configuration is mounted as Docker secrets and read
+    # directly by the Node.js application, so they never appear in the compose
+    # `environment:` block.
+    depends_on:
+      migrations:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      jaeger:
+        condition: service_started
+    environment:
+      <<: *shared-env
+      PORT: 34567
+      CORS_ORIGINS: http://localhost:3000
+      RUN_WORKER_INPROCESS: "false"
+      OTEL_SERVICE_NAME: winston-ai-backend
+      ALERT_WEBHOOK_URL: ${ALERT_WEBHOOK_URL:-}
+    secrets:
+      - database_url
+      - redis_url
+      - api_secret
+      - jwt_secret
+      - admin_api_key
+      - mistral_api_key
+      - kimi_api_key
+      - alert_receiver_token
+    <<: *app-hardening
+    read_only: true
+    tmpfs:
+      - /tmp
+    ports:
+      - "127.0.0.1:34567:34567"
+    volumes:
+      # DEV ONLY — use docker-compose.prod.yml in production
+      - ./backend/prisma:/app/prisma:ro
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:34567/api/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 128M
+
+  worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    stop_grace_period: 60s
+    networks:
+      default: {}
+      internal: {}
+    # LOW #70: Sensitive configuration is mounted as Docker secrets and read
+    # directly by the Node.js application.
+    command: ["node", "dist/queue/workers/run-worker.js"]
+    depends_on:
+      migrations:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      jaeger:
+        condition: service_started
+    environment:
+      <<: *shared-env
+      OTEL_SERVICE_NAME: winston-ai-worker
+      WORKER_LOCK_DURATION_MS: "1000000"
+      WORKER_HEALTH_BIND: "0.0.0.0"
+      WORKER_HEALTH_PORT: "3001"
+      WORKER_METRICS_BIND: "0.0.0.0"
+      WORKER_METRICS_PORT: "3002"
+    secrets:
+      - database_url
+      - redis_url
+      - api_secret
+      - jwt_secret
+      - admin_api_key
+      - mistral_api_key
+      - kimi_api_key
+    <<: *app-hardening
+    read_only: true
+    tmpfs:
+      - /tmp
+    # C1: Healthcheck via the worker's built-in Express endpoint on port 3001.
+    # The previous design had no healthcheck because BullMQ doesn't expose an
+    # HTTP server. The tiny Express health endpoint (defined in run-worker.ts)
+    # now provides liveness + readiness probes without affecting worker logic.
+    ports:
+      - "127.0.0.1:3001:3001"
+      # L4-WORKER-METRICS: expose the worker's Prometheus metrics server port.
+      # Prometheus scrapes worker:3002/metrics from the Docker network.
+      - "127.0.0.1:3002:3002"
+    volumes:
+      # DEV ONLY — use docker-compose.prod.yml in production
+      - ./backend/prisma:/app/prisma:ro
+    # Health check verifies the worker health server (always started by
+    # run-worker.ts on port 3001). If the health server fails to bind
+    # (edge case: port conflict), fall back to a process-level check.
+    # The `[r]un-worker` grep trick avoids matching the grep itself.
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:3001/health 2>/dev/null || ps aux | grep -q '[r]un-worker' || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          cpus: '1.5'
+          memory: 1024M
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    stop_grace_period: 60s
+    networks:
+      default: {}
+    depends_on:
+      backend:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      API_BASE_URL: http://backend:34567
+      NEXT_PUBLIC_API_URL:
+    secrets:
+      - jwt_secret
+    <<: *app-hardening
+    # Note: read_only is intentionally NOT set for the frontend because the
+    # entrypoint writes /app/public/runtime-config.js at container startup.
+    # The frontend still runs as the unprivileged nextjs user.
+    tmpfs:
+      - /tmp
+      - /app/.next/cache
+    ports:
+      - "127.0.0.1:3000:3000"
+    healthcheck:
+      # Next.js 16 binds to the container's network interface IP, NOT 0.0.0.0
+      # or 127.0.0.1. With dynamic IPs, resolve the service name via Docker DNS.
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://frontend:3000/"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          cpus: '0.1'
+          memory: 128M
+
+  # Fix: Add Prometheus monitoring service. The backend exposes /metrics but no
+  # Prometheus container existed to scrape them. Also add redis_exporter sidecar
+  # since Prometheus cannot scrape Redis directly (Redis speaks RESP, not HTTP).
+  prometheus:
+    # LOW #66: Pin image by digest for reproducible builds.
+    image: prom/prometheus:v2.53.0@sha256:b8e8cec4bfdfda676f4334f4f2aab9d8758f51d76ac41fc35224f6ae79b79f54
+    restart: unless-stopped
+    stop_grace_period: 60s
+    networks:
+      default: {}
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=15d'
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
+      - prometheus_data:/prometheus
+    ports:
+      - "127.0.0.1:9090:9090"
+    depends_on:
+      backend:
+        condition: service_healthy
+    <<: *app-hardening
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1024M
+        reservations:
+          cpus: '0.25'
+          memory: 256M
+
+  redis-exporter:
+    # LOW #66 + LOW #70: Pin image by digest and use the Alpine variant so we
+    # can source the Redis password from a Docker secret before exec'ing the
+    # exporter binary.
+    image: oliver006/redis_exporter:v1.66.0-alpine@sha256:54ff5d593f083de4f378935a4e71342f0b0d6665cf54b492d2d9c0607c55afa4
+    restart: unless-stopped
+    stop_grace_period: 60s
+    networks:
+      default: {}
+      internal: {}
+    environment:
+      REDIS_ADDR: redis://redis:6379
+    command: sh -c 'export REDIS_PASSWORD=$$(cat /run/secrets/redis_password); exec /redis_exporter'
+    secrets:
+      - redis_password
+    <<: *app-hardening
+    read_only: true
+    tmpfs:
+      - /tmp
+    ports:
+      - "127.0.0.1:9121:9121"
+    depends_on:
+      redis:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          cpus: '0.1'
+          memory: 32M
+
+  # LOW #67: Alertmanager receives alerts from Prometheus and routes them to
+  # notification receivers. Replace the placeholder webhook in
+  # prometheus/alertmanager.yml with a real endpoint before enabling in production.
+  alertmanager:
+    build:
+      context: .
+      dockerfile: deploy/alertmanager/Dockerfile
+    image: youtube-alertmanager:latest
+    restart: unless-stopped
+    stop_grace_period: 60s
+    networks:
+      default: {}
+    environment:
+      ALERT_WEBHOOK_URL: ${ALERT_WEBHOOK_URL:-}
+    secrets:
+      - alert_receiver_token
+    volumes:
+      - alertmanager_data:/alertmanager
+    ports:
+      - "127.0.0.1:9093:9093"
+    <<: *app-hardening
+    deploy:
+      resources:
+        limits:
+          cpus: '0.25'
+          memory: 128M
+        reservations:
+          cpus: '0.05'
+          memory: 32M
+
+  # LOW #67: Loki aggregates container logs so they can be queried from Grafana.
+  loki:
+    image: grafana/loki@sha256:d14b3a2c419b72fe27cd094c017863bd37a5ea9ac7d72f35bcd25f5bd081dc47
+    restart: unless-stopped
+    stop_grace_period: 60s
+    networks:
+      default: {}
+    command: -config.file=/etc/loki/local-config.yaml
+    volumes:
+      - ./deploy/loki/loki-config.yml:/etc/loki/local-config.yaml:ro
+      - loki_data:/loki
+    ports:
+      - "127.0.0.1:3100:3100"
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          cpus: '0.1'
+          memory: 128M
+
+  # LOW #67: Promtail ships Docker container logs to Loki.
+  promtail:
+    image: grafana/promtail@sha256:238d8562dc29ec83d2f5933c7fd6e9469a90ea316a04f160dcc7cf842910ca94
+    restart: unless-stopped
+    stop_grace_period: 60s
+    networks:
+      default: {}
+    # The grafana/promtail image entrypoint is `/usr/bin/promtail` (the binary),
+    # so we must run a shell to read the Docker secret before exec'ing promtail.
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - 'export LOKI_TENANT_ID="$$(cat /run/secrets/loki_tenant_id)"; exec /usr/bin/promtail -config.file=/etc/promtail/config.yml -config.expand-env=true'
+    secrets:
+      - loki_tenant_id
+    volumes:
+      - ./deploy/loki/promtail-config.yml:/etc/promtail/config.yml:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    depends_on:
+      - loki
+    <<: *app-hardening
+    deploy:
+      resources:
+        limits:
+          cpus: '0.25'
+          memory: 128M
+        reservations:
+          cpus: '0.05'
+          memory: 32M
+
+  # LOW #67: Grafana provides dashboards and unified querying for Prometheus
+  # metrics and Loki logs.
+  grafana:
+    image: grafana/grafana@sha256:6ea068891652aa6a65ca9065c26b89de939653803c836426970305c11fd00534
+    restart: unless-stopped
+    stop_grace_period: 60s
+    networks:
+      default: {}
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD__FILE=/run/secrets/grafana_admin_password
+      - GF_PATHS_PROVISIONING=/etc/grafana/provisioning
+    secrets:
+      - grafana_admin_password
+      - loki_tenant_id
+    volumes:
+      - ./deploy/grafana/entrypoint.sh:/grafana-entrypoint.sh:ro
+      - ./deploy/grafana/provisioning:/etc/grafana/provisioning-templates:ro
+      - grafana_data:/var/lib/grafana
+    ports:
+      - "127.0.0.1:3003:3000"
+    depends_on:
+      - prometheus
+      - loki
+    entrypoint: ["/grafana-entrypoint.sh"]
+    <<: *app-hardening
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+        reservations:
+          cpus: '0.1'
+          memory: 64M
+
+volumes:
+  postgres_data:
+  redis_data:
+  prometheus_data:
+  alertmanager_data:
+  loki_data:
+  grafana_data:
+
+secrets:
+  database_url:
+    file: ./secrets/database_url
+  redis_url:
+    file: ./secrets/redis_url
+  api_secret:
+    file: ./secrets/api_secret
+  jwt_secret:
+    file: ./secrets/jwt_secret
+  admin_api_key:
+    file: ./secrets/admin_api_key
+  postgres_password:
+    file: ./secrets/postgres_password
+  redis_password:
+    file: ./secrets/redis_password
+  mistral_api_key:
+    file: ./secrets/mistral_api_key
+  kimi_api_key:
+    file: ./secrets/kimi_api_key
+  grafana_admin_password:
+    file: ./secrets/grafana_admin_password.txt
+  alert_receiver_token:
+    file: ./secrets/alert_receiver_token
+  loki_tenant_id:
+    file: ./secrets/loki_tenant_id

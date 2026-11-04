@@ -1,0 +1,65 @@
+# LOW #67: Promtail configuration for shipping Docker container logs to Loki.
+# Mounted into the promtail container by docker-compose.yml.
+
+server:
+  http_listen_port: 9080
+  grpc_listen_port: 0
+
+positions:
+  filename: /tmp/positions.yaml
+
+clients:
+  # LOW #70: Tenant ID is injected from the loki_tenant_id Docker secret via
+  # the LOKI_TENANT_ID environment variable. auth_enabled: true in Loki requires
+  # this header for every push/query.
+  - url: http://loki:3100/loki/api/v1/push
+    tenant_id: ${LOKI_TENANT_ID}
+
+scrape_configs:
+  # Scrape the Docker container logs.
+  # Each log line is a single JSON object written by the Docker daemon
+  # with these top-level keys: { time, stream, _id, container, image, ... }.
+  # Promtail parses the `log` field (the actual container stdout) and
+  # extracts JSON-encoded pino logs from it.
+  - job_name: docker
+    static_configs:
+      - targets:
+          - localhost
+        labels:
+          job: docker
+          __path__: /var/lib/docker/containers/**/*-json.log
+    pipeline_stages:
+      # Extract the container name from the Docker metadata
+      - docker: {}
+      # Pin the timestamp from the Docker log line (not the scrape time)
+      - timestamp:
+          source: time
+          format: RFC3339Nano
+      # Try to parse the log line as JSON. The backend uses pino which
+      # writes JSON. If parsing succeeds, promote fields to labels.
+      - json:
+          expressions:
+            level: level
+            envName: envName
+            requestId: requestId
+            method: method
+            url: url
+            status: status
+            durationMs: durationMs
+            err: err
+            msg: msg
+      - labels:
+          level:
+          envName:
+          requestId:
+      # Drop healthcheck noise — the frontend polls /api/health every
+      # 30 seconds, which fills up Loki with low-signal log lines.
+      - match:
+          selector: '{url="/api/health"}'
+          action: drop
+      - match:
+          selector: '{url="/metrics"}'
+          action: drop
+      - match:
+          selector: '{url="/api/docs"}'
+          action: drop

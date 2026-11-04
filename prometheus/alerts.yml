@@ -1,0 +1,92 @@
+# Production alert rules for the CinematicAI stack.
+# Prometheus evaluates these rules and forwards firing alerts to Alertmanager.
+# Tune thresholds to your environment before enabling in production.
+
+groups:
+  - name: cinematicai
+    rules:
+      - alert: BackendDown
+        expr: up{job="backend"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Backend API is down"
+          description: "The backend API has been unreachable for more than 1 minute."
+
+      - alert: WorkerDown
+        expr: up{job="worker"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Story worker is down"
+          description: "The story generation worker has been unreachable for more than 1 minute."
+
+      - alert: HighErrorRate
+        expr: |
+          (
+            sum(rate(http_request_duration_seconds_count{status=~"5.."}[5m]))
+            /
+            sum(rate(http_request_duration_seconds_count[5m]))
+          ) > 0.05
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High backend error rate"
+          description: "More than 5% of backend requests returned 5xx in the last 5 minutes."
+
+      - alert: RedisMemoryHigh
+        expr: redis_memory_max_bytes > 0 and redis_memory_used_bytes / redis_memory_max_bytes > 0.85
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Redis memory usage is high"
+          description: "Redis memory usage has been above 85% for more than 5 minutes."
+
+      - alert: QueueDepthHigh
+        expr: cinematicai_queue_depth{queue="story-generation"} > 10
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Story generation queue is backing up"
+          description: "More than 10 jobs are waiting in the story-generation queue."
+
+      - alert: DLQDepthHigh
+        expr: |
+          cinematicai_queue_depth{queue="story-generation-dlq"} > 5
+          or
+          cinematicai_queue_depth{queue="background-dlq"} > 5
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "DLQ depth is high"
+          description: "Dead-letter queues contain more than 5 jobs that require operator attention."
+
+      - alert: AIRequestsFailing
+        expr: increase(cinematicai_ai_requests_total{status="failure"}[10m]) > 5
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "AI provider requests are failing"
+          description: "More than 5 AI requests failed in the last 10 minutes. Check provider status and API keys."
+
+      - alert: TokenBudgetExceeded
+        expr: increase(cinematicai_jobs_total{status="rejected"}[10m]) > 0
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Generation requests rejected"
+          description: "Story generation requests are being rejected (quota, budget, or rate limit)."
+
+      # NOTE: A DiskSpaceLow alert (node_filesystem_avail_bytes/node_filesystem_size_bytes)
+      # was removed: it could never fire because no node_exporter is scraped
+      # (prometheus.yml scrapes only prometheus/backend/worker/redis-exporter) and no
+      # node_exporter service is deployed. Restore it together with a node_exporter
+      # container + scrape target before relying on disk-space monitoring.

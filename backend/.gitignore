@@ -1,0 +1,39 @@
+node_modules/
+dist/
+build/
+coverage/
+
+# Environment files — never commit real credentials
+# Root-level patterns (apply everywhere via git's standard behavior)
+.env
+.env.local
+.env.production
+.env.staging
+.env.*.local
+!.env.example
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Build artifacts
+*.tsbuildinfo
+
+# Logs
+*.log
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Media
+*.png
+*.jpg
+*.jpeg
+*.gif
+
+# Certificates
+*.pem

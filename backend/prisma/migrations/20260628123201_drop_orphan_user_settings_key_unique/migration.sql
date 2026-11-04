@@ -1,0 +1,32 @@
+-- M33: Drop the orphan `user_settings_key_key` UNIQUE index.
+--
+-- When M13 changed the UserSettings model from `@unique` on `key` to
+-- `@@unique([userId, key])` so per-user settings would scope correctly,
+-- the new compound index was created, but the old single-column UNIQUE
+-- index was never dropped. The DB has BOTH:
+--   - user_settings_key_key      UNIQUE (key)         <- orphan from old schema
+--   - user_settings_userId_key_key UNIQUE ("userId", key)  <- current schema
+--
+-- The orphan single-column index causes upserts to fail with
+-- "Unique constraint failed on the fields: (key)" because two users
+-- saving the same key (e.g. `preferred_genre`) hit the single-column
+-- unique index even though they have different userIds. This manifested
+-- in the E2E test 'PUT /api/user-settings/:key saves setting' which
+-- returned 500 the second time it ran.
+--
+-- Both the underlying CONSTRAINT (if present) AND the UNIQUE INDEX
+-- must be dropped. PostgreSQL stores UNIQUE constraints as UNIQUE
+-- INDEXes internally, so the same physical object may be referenced
+-- by either a constraint name or an index name. The DROP CONSTRAINT
+-- alone is not enough when the index was created directly (not via
+-- the constraint).
+--
+-- The index is safe to drop because:
+--   1. The Prisma model has no `@unique` on `key` (only `@@unique([userId, key])`).
+--   2. The application code always queries by the compound key (see
+--      services/user-settings.ts setUserSetting line 152).
+--   3. The plain non-unique `user_settings_key_idx` remains for
+--      read performance (any legacy queries that filter by `key` only).
+ALTER TABLE "user_settings" DROP CONSTRAINT IF EXISTS "user_settings_key_key";
+DROP INDEX IF EXISTS "user_settings_key_key";
+

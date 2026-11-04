@@ -1,0 +1,11 @@
+# Prevent secrets from leaking through git diff
+.env binary
+
+# M59: EOL normalization — this repo is developed on Windows but ships
+# shell/cron files to Linux. CRLF checkouts break the shebang
+# (/usr/bin/env: 'bash\r': No such file or directory) and silently
+# disable /etc/cron.d jobs.
+* text=auto eol=lf
+*.sh text eol=lf
+*.cron text eol=lf
+Dockerfile* text eol=lf

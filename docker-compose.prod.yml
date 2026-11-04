@@ -1,0 +1,181 @@
+# Production override for docker-compose.yml.
+# Removes development-only volume mounts and host port exposures, adds
+# a TLS-terminating Caddy reverse proxy, and hardens secrets handling.
+#
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+#
+# Before first deploy:
+#   1. Copy .env.example -> .env and fill in REAL secrets.
+#   2. Set DISABLE_REGISTRATION=true and INVITE_CODE to a strong random value.
+#   3. Set ALLOW_INSECURE_LOCAL_HTTP=false (or unset it).
+#   4. Set CADDY_HOST to your public domain.
+#   5. Open ports 80 and 443 on the host firewall.
+
+services:
+  caddy:
+    # LOW #66: Pin image by digest for reproducible, tamper-resistant builds.
+    image: caddy:2-alpine@sha256:5f5c8640aae01df9654968d946d8f1a56c497f1dd5c5cda4cf95ab7c14d58648
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./deploy/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    environment:
+      - CADDY_HOST=${CADDY_HOST:-localhost}
+    depends_on:
+      - frontend
+      - backend
+    networks:
+      - default
+    # In production the reverse proxy is the only public-facing service.
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+    security_opt:
+      - no-new-privileges:true
+
+  alertmanager:
+    build:
+      context: .
+      dockerfile: deploy/alertmanager/Dockerfile
+    image: youtube-alertmanager:latest
+    environment:
+      - ALERT_WEBHOOK_URL=${ALERT_WEBHOOK_URL:-}
+    secrets:
+      - alert_receiver_token
+    volumes:
+      - alertmanager_data:/alertmanager
+    ports: []
+    # The custom entrypoint generates /etc/alertmanager/alertmanager.generated.yml
+    # from the Docker secret at /run/secrets/alert_receiver_token.
+    command:
+      - --storage.path=/alertmanager
+
+  backend:
+    volumes: []  # Remove dev-only mounts
+    stop_grace_period: 60s
+    ports:
+      - "127.0.0.1:34567:34567"  # Bound to loopback; reverse proxy reaches it
+    environment:
+      # SECURITY: production must NEVER allow plain-HTTP auth.
+      - ALLOW_INSECURE_LOCAL_HTTP=false
+      # SINGLE_USER_MODE: lock down open registration by default.
+      - DISABLE_REGISTRATION=${DISABLE_REGISTRATION:-true}
+      - INVITE_CODE=${INVITE_CODE:-}
+      # CORS: allow the public Caddy origin.
+      - CORS_ORIGINS=${CORS_ORIGINS:-https://${CADDY_HOST:-localhost}}
+      # AI cost controls — safe defaults; override via env for larger deployments.
+      - MAX_CONCURRENT_GENERATIONS=${MAX_CONCURRENT_GENERATIONS:-2}
+      - MAX_STORIES_PER_DAY=${MAX_STORIES_PER_DAY:-10}
+      - AI_DAILY_SPEND_CAP_USD=${AI_DAILY_SPEND_CAP_USD:-10}
+      - AI_MONTHLY_SPEND_CAP_USD=${AI_MONTHLY_SPEND_CAP_USD:-100}
+      # Token budgets (provider-specific)
+      - AI_DAILY_TOKEN_BUDGET=${AI_DAILY_TOKEN_BUDGET:-100000}
+      - AI_MONTHLY_TOKEN_BUDGET=${AI_MONTHLY_TOKEN_BUDGET:-1000000}
+      # Alerting
+      - ALERT_WEBHOOK_URL=${ALERT_WEBHOOK_URL:-}
+    secrets:
+      - database_url
+      - redis_url
+      - api_secret
+      - jwt_secret
+      - admin_api_key
+      - mistral_api_key
+      - kimi_api_key
+      - alert_receiver_token
+
+  worker:
+    volumes: []  # Remove dev-only mounts
+    stop_grace_period: 60s
+    environment:
+      # Worker reads the same env as backend for budget/cost enforcement.
+      - AI_DAILY_TOKEN_BUDGET=${AI_DAILY_TOKEN_BUDGET:-100000}
+      - AI_MONTHLY_TOKEN_BUDGET=${AI_MONTHLY_TOKEN_BUDGET:-1000000}
+      - AI_DAILY_SPEND_CAP_USD=${AI_DAILY_SPEND_CAP_USD:-10}
+      - AI_MONTHLY_SPEND_CAP_USD=${AI_MONTHLY_SPEND_CAP_USD:-100}
+    secrets:
+      - database_url
+      - redis_url
+      - api_secret
+      - jwt_secret
+      - admin_api_key
+      - mistral_api_key
+      - kimi_api_key
+
+  postgres:
+    ports: []  # No host port exposure in production
+    stop_grace_period: 60s
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  redis:
+    ports: []  # No host port exposure in production
+    stop_grace_period: 60s
+    volumes:
+      - redis_data:/data
+
+  jaeger:
+    ports: []  # No host port exposure in production
+    stop_grace_period: 60s
+
+  prometheus:
+    ports: []  # No host port exposure in production
+    stop_grace_period: 60s
+
+  redis-exporter:
+    ports: []  # No host port exposure in production
+    stop_grace_period: 60s
+
+  frontend:
+    ports: []  # Behind reverse proxy only
+    stop_grace_period: 60s
+    environment:
+      # Runtime API base for the BFF proxy — relative URLs through Caddy.
+      - API_BASE_URL=${API_BASE_URL:-http://backend:34567}
+    secrets:
+      - jwt_secret
+
+  grafana:
+    ports: []  # No host port exposure in production
+    stop_grace_period: 60s
+    secrets:
+      - grafana_admin_password
+      - loki_tenant_id
+
+  promtail:
+    stop_grace_period: 60s
+    command: sh -c 'export LOKI_TENANT_ID="$(cat /run/secrets/loki_tenant_id)"; exec /usr/bin/promtail -config.file=/etc/promtail/config.yml -config.expand-env=true'
+    secrets:
+      - loki_tenant_id
+
+volumes:
+  postgres_data:
+  redis_data:
+  caddy_data:
+  caddy_config:
+  alertmanager_data:
+
+secrets:
+  database_url:
+    file: ./secrets/database_url
+  redis_url:
+    file: ./secrets/redis_url
+  api_secret:
+    file: ./secrets/api_secret
+  jwt_secret:
+    file: ./secrets/jwt_secret
+  admin_api_key:
+    file: ./secrets/admin_api_key
+  mistral_api_key:
+    file: ./secrets/mistral_api_key
+  kimi_api_key:
+    file: ./secrets/kimi_api_key
+  alert_receiver_token:
+    file: ./secrets/alert_receiver_token
+  loki_tenant_id:
+    file: ./secrets/loki_tenant_id

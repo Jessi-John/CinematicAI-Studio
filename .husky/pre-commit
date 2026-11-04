@@ -1,0 +1,17 @@
+#!/usr/bin/env sh
+# Husky pre-commit hook — runs on every `git commit`.
+#
+# Steps (fail-fast):
+#   1. Block commits of .env (real secrets) and .env.backup.
+#   2. Run gitleaks on the staged diff if installed.
+#   3. Frontend: run lint-staged (eslint --fix on .ts/.tsx).
+#   4. Backend: run lint-staged (eslint --fix on .ts).
+
+set -e
+
+# 1. Secret scan
+bash scripts/check-secrets.sh
+
+# 2. Lint-staged (runs eslint --fix on staged files; see backend/package.json
+#    and the frontend root package.json for the lint-staged config).
+npx lint-staged

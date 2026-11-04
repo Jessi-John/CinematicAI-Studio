@@ -1,0 +1,39 @@
+# Alertmanager configuration template for CinematicAI Studio.
+# Variables ${ALERT_RECEIVER_TOKEN} and ${ALERT_WEBHOOK_URL} are substituted
+# by deploy/alertmanager/entrypoint.sh at container start time.
+
+global:
+  resolve_timeout: 5m
+
+route:
+  group_by: ['alertname', 'severity']
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+  receiver: 'cinematicai-webhook'
+  routes:
+    - match:
+        severity: critical
+      receiver: 'cinematicai-webhook'
+      continue: true
+    - match:
+        severity: warning
+      receiver: 'cinematicai-webhook'
+      continue: false
+
+receivers:
+  - name: 'cinematicai-webhook'
+    webhook_configs:
+      - url: 'http://backend:34567/api/alerts/alerts'
+        send_resolved: true
+        http_config:
+          bearer_token: '${ALERT_RECEIVER_TOKEN}'
+      - url: '${ALERT_WEBHOOK_URL}'
+        send_resolved: true
+
+inhibit_rules:
+  - source_match:
+      severity: 'critical'
+    target_match:
+      severity: 'warning'
+    equal: ['alertname']

@@ -1,0 +1,72 @@
+name: Release
+
+on:
+  # H6 FIX: only release after the CI workflow passes on main. Previously this
+  # triggered on every push to main with no test gate, so a broken build could
+  # be version-bumped, tagged, and published as a release.
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    # Only proceed when the CI run that triggered this workflow succeeded.
+    if: github.event.workflow_run.conclusion == 'success'
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          # Fetch all history and tags so standard-version can
+          # determine the next version from conventional commits.
+          fetch-depth: 0
+          # Release exactly the commit that CI validated.
+          ref: ${{ github.event.workflow_run.head_sha }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci --frozen-lockfile
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+
+      - name: Determine next version
+        id: version
+        run: |
+          # standard-version --dry-run outputs the proposed version.
+          # We capture it to decide whether to publish a release.
+          npx standard-version --dry-run 2>&1 | tee /tmp/stdver.log
+          VERSION=$(grep -oP 'bumping version in package\.json from \S+ to \K\S+' /tmp/stdver.log || true)
+          echo "next=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Create release
+        if: steps.version.outputs.next != ''
+        run: |
+          npm run release
+          git push --follow-tags origin main
+
+      - name: Publish GitHub Release
+        if: steps.version.outputs.next != ''
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # H6 FIX: standard-version tags WITH the default `v` prefix (so the
+          # release tag is vX.Y.Z) but writes the CHANGELOG header as `## [X.Y.Z]`
+          # (bare version, NO v). Keep VERSION (bare) for the CHANGELOG lookup
+          # and TAG (v-prefixed) for the git tag/release. The previous command
+          # searched the CHANGELOG for `## [vX.Y.Z]`, which never matched, so
+          # every release shipped with empty notes.
+          VERSION="${{ steps.version.outputs.next }}"
+          TAG="v${VERSION}"
+          gh release create "$TAG" \
+            --title "$TAG" \
+            --notes "$(sed -n '/^## \['"$VERSION"'\]/,/^## \[/p' CHANGELOG.md | head -n -2 | tail -n +3)"

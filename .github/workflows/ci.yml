@@ -1,0 +1,610 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:  # Allow manual runs from the GitHub Actions tab
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  commitlint:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+      - name: Install
+        run: npm ci --frozen-lockfile
+      - name: Lint commits
+        run: npx commitlint --from ${{ github.event.pull_request.base.sha }} --to ${{ github.event.pull_request.head.sha }} --verbose
+
+  migration-test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        # LOW #66: Pin service images by digest for reproducible CI.
+        image: pgvector/pgvector:pg16@sha256:8a5f16c3c438d5654cb6f438a7866da05cc76bc44e330b5ea246a94516d6d370
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: cinematicai_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: backend/package-lock.json
+      - name: Install backend deps
+        run: cd backend && npm ci --frozen-lockfile
+      - name: Generate Prisma client
+        run: cd backend && npx prisma generate
+      - name: Test migration integrity
+        run: node scripts/test-migrations.mjs
+        env:
+          DATABASE_URL: postgresql://postgres:test@localhost:5432/cinematicai_test
+
+  schema-audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: backend/package-lock.json
+      - name: Install backend deps
+        run: cd backend && npm ci --frozen-lockfile
+      - name: Generate Prisma client
+        run: cd backend && npx prisma generate
+      - name: Create .env for docker-compose
+        run: |
+          echo "DATABASE_URL=postgresql://postgres:${POSTGRES_PASSWORD}@localhost:15432/cinematicai" > .env
+          echo "REDIS_URL=redis://:${REDIS_PASSWORD}@localhost:6379" >> .env
+          echo "POSTGRES_PASSWORD=${POSTGRES_PASSWORD}" >> .env
+          echo "REDIS_PASSWORD=${REDIS_PASSWORD}" >> .env
+        env:
+          POSTGRES_PASSWORD: ${{ secrets.TEST_POSTGRES_PASSWORD }}
+          REDIS_PASSWORD: ${{ secrets.TEST_REDIS_PASSWORD }}
+      - name: Start docker-compose services
+        run: docker compose up -d postgres redis
+      - name: Wait for services
+        run: |
+          for i in $(seq 1 30); do nc -z localhost 15432 && break; sleep 1; done
+          for i in $(seq 1 30); do nc -z localhost 6379 && break; sleep 1; done
+      - name: Run database migrations
+        run: cd backend && npx prisma migrate deploy
+        env:
+          DATABASE_URL: postgresql://postgres:${{ secrets.TEST_POSTGRES_PASSWORD }}@localhost:15432/cinematicai
+      - name: Run schema audit tests
+        run: cd backend && npm run test:schema
+        env:
+          DATABASE_URL: postgresql://postgres:${{ secrets.TEST_POSTGRES_PASSWORD }}@localhost:15432/cinematicai
+          REDIS_URL: redis://:${{ secrets.TEST_REDIS_PASSWORD }}@localhost:6379
+
+  hnsw-index:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: backend/package-lock.json
+      - name: Install backend deps
+        run: cd backend && npm ci --frozen-lockfile
+      - name: Generate Prisma client
+        run: cd backend && npx prisma generate
+      - name: Create .env for docker-compose
+        run: |
+          echo "DATABASE_URL=postgresql://postgres:${POSTGRES_PASSWORD}@localhost:15432/cinematicai" > .env
+          echo "REDIS_URL=redis://:${REDIS_PASSWORD}@localhost:6379" >> .env
+          echo "POSTGRES_PASSWORD=${POSTGRES_PASSWORD}" >> .env
+          echo "REDIS_PASSWORD=${REDIS_PASSWORD}" >> .env
+        env:
+          POSTGRES_PASSWORD: ${{ secrets.TEST_POSTGRES_PASSWORD }}
+          REDIS_PASSWORD: ${{ secrets.TEST_REDIS_PASSWORD }}
+      - name: Start docker-compose services
+        run: docker compose up -d postgres redis
+      - name: Wait for services
+        run: |
+          for i in $(seq 1 30); do nc -z localhost 15432 && break; sleep 1; done
+          for i in $(seq 1 30); do nc -z localhost 6379 && break; sleep 1; done
+      - name: Run database migrations
+        run: cd backend && npx prisma migrate deploy
+        env:
+          DATABASE_URL: postgresql://postgres:${{ secrets.TEST_POSTGRES_PASSWORD }}@localhost:15432/cinematicai
+      - name: Run HNSW index tests
+        run: cd backend && npm run test:hnsw
+        env:
+          DATABASE_URL: postgresql://postgres:${{ secrets.TEST_POSTGRES_PASSWORD }}@localhost:15432/cinematicai
+          REDIS_URL: redis://:${{ secrets.TEST_REDIS_PASSWORD }}@localhost:6379
+
+  backend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: backend/package-lock.json
+      - name: Install
+        run: cd backend && npm ci --frozen-lockfile
+      - name: Generate Prisma client
+        run: cd backend && npx prisma generate
+      - name: TypeScript check
+        run: cd backend && npx tsc --noEmit
+      - name: TypeScript check (tests)
+        # Typecheck test files too — `tsc --noEmit` excludes *.test.ts.
+        # Without this, mocks/casts that break at runtime can pass CI.
+        run: cd backend && npm run typecheck:all
+      - name: Lint
+        run: cd backend && npm run lint
+      - name: Build
+        run: cd backend && npm run build
+      - name: Verify backend build artifacts are up to date
+        run: node scripts/check-build-artifacts.js --backend-only
+      - name: Security audit
+        run: cd backend && npm audit --audit-level=high
+
+      - name: SAST with ESLint security plugin
+        shell: bash
+        run: |
+          set -o pipefail
+          cd backend
+          npx eslint src --no-error-on-unmatched-pattern --format json | tee eslint-results.json
+
+      - name: Secret scanning
+        uses: trufflesecurity/trufflehog@f446421baf832d6356c42c1743d99abff52ff334
+        with:
+          path: ./
+          base: ${{ github.event.repository.default_branch }}
+          head: ${{ github.sha }}
+          no-fork: true
+
+      - name: Dependency vulnerability scan
+        uses: aquasecurity/trivy-action@cf5c088a69634cd13ccddc735d7926162c31f9a6
+        with:
+          scan-type: 'fs'
+          scan-ref: 'backend/'
+          severity: 'CRITICAL,HIGH'
+          exit-code: '1'
+          ignore-unfixed: true
+
+      - name: Unit tests
+        run: cd backend && npm test
+        env:
+          NODE_ENV: test
+          DATABASE_URL: ${{ secrets.TEST_DATABASE_URL }}
+          REDIS_URL: ${{ secrets.TEST_REDIS_URL }}
+          API_SECRET: ${{ secrets.TEST_API_SECRET }}
+          ADMIN_API_KEY: ${{ secrets.TEST_ADMIN_API_KEY }}
+          JWT_SECRET: ${{ secrets.TEST_JWT_SECRET }}
+          KIMI_API_KEY: ${{ secrets.TEST_KIMI_API_KEY }}
+          MISTRAL_API_KEY: ${{ secrets.TEST_MISTRAL_API_KEY }}
+      - name: Upload backend build
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: github.ref == 'refs/heads/main'
+        with:
+          name: backend-dist
+          path: backend/dist/
+          retention-days: 1
+
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: package-lock.json
+      - name: Install
+        run: npm ci --frozen-lockfile
+      - name: TypeScript check
+        run: npx tsc --noEmit
+      - name: TypeScript check (tests)
+        # Typecheck test files too — main `tsc --noEmit` excludes *.test.ts(x)
+        # because they aren't part of the app's runtime. This catches type
+        # errors in mocks, casts, and React Testing Library calls.
+        run: npx tsc -p tsconfig.test.json --noEmit
+      - name: Unit tests
+        run: npm test
+      - name: Lint
+        run: npx eslint .
+      - name: Audit dependencies
+        run: npm audit --audit-level=high
+      - name: Secret scanning
+        uses: trufflesecurity/trufflehog@f446421baf832d6356c42c1743d99abff52ff334
+        with:
+          path: ./
+          base: ${{ github.event.repository.default_branch }}
+          head: ${{ github.sha }}
+          no-fork: true
+      - name: Build
+        run: npm run build
+      - name: Verify frontend build artifacts are up to date
+        run: node scripts/check-build-artifacts.js --frontend-only
+      - name: Upload frontend build
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: github.ref == 'refs/heads/main'
+        with:
+          name: frontend-next
+          path: |
+            .next/
+            public/
+          retention-days: 1
+
+  e2e:
+    runs-on: ubuntu-latest
+    needs: [backend, frontend]
+    services:
+      postgres:
+        # LOW #66: Pin service images by digest for reproducible CI.
+        image: pgvector/pgvector:pg16@sha256:8a5f16c3c438d5654cb6f438a7866da05cc76bc44e330b5ea246a94516d6d370
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: password
+          POSTGRES_DB: test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        # LOW #66: Pin service images by digest for reproducible CI.
+        image: redis:7@sha256:33d3a320585c78a71f509c68284a3423a0d790380931829e8abac44aaa31b8c0
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: package-lock.json
+      - name: Install deps
+        run: npm ci --frozen-lockfile && cd backend && npm ci --frozen-lockfile
+      - name: Download backend artifact
+        if: github.ref == 'refs/heads/main'
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: backend-dist
+          path: backend/dist/
+      - name: Download frontend artifact
+        if: github.ref == 'refs/heads/main'
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: frontend-next
+          path: .
+      - name: Build frontend (if no artifact)
+        if: github.ref != 'refs/heads/main'
+        run: npm run build
+      - name: Build backend (if no artifact)
+        if: github.ref != 'refs/heads/main'
+        run: cd backend && npx prisma generate && npm run build
+      - name: Run database migrations
+        run: cd backend && npx prisma migrate deploy
+        env:
+          DATABASE_URL: ${{ secrets.TEST_DATABASE_URL }}
+      - name: Wait for services to be healthy
+        run: |
+          for i in $(seq 1 30); do
+            nc -z localhost 5432 && break
+            sleep 1
+          done
+          for i in $(seq 1 30); do
+            nc -z localhost 6379 && break
+            sleep 1
+          done
+      - name: Start backend server
+        run: cd backend && node dist/server.js &
+        env:
+          DATABASE_URL: ${{ secrets.TEST_DATABASE_URL }}
+          REDIS_URL: ${{ secrets.TEST_REDIS_URL }}
+          REDIS_PASSWORD: ${{ secrets.TEST_REDIS_PASSWORD }}
+          API_SECRET: ${{ secrets.TEST_API_SECRET }}
+          ADMIN_API_KEY: ${{ secrets.TEST_ADMIN_API_KEY }}
+          JWT_SECRET: ${{ secrets.TEST_JWT_SECRET }}
+          KIMI_API_KEY: ${{ secrets.TEST_KIMI_API_KEY }}
+          MISTRAL_API_KEY: ${{ secrets.TEST_MISTRAL_API_KEY }}
+          NODE_ENV: test
+          E2E_TEST: true
+          PORT: "34567"
+      - name: Start worker
+        run: cd backend && node dist/queue/workers/run-worker.js &
+        env:
+          DATABASE_URL: ${{ secrets.TEST_DATABASE_URL }}
+          REDIS_URL: ${{ secrets.TEST_REDIS_URL }}
+          REDIS_PASSWORD: ${{ secrets.TEST_REDIS_PASSWORD }}
+          API_SECRET: ${{ secrets.TEST_API_SECRET }}
+          ADMIN_API_KEY: ${{ secrets.TEST_ADMIN_API_KEY }}
+          JWT_SECRET: ${{ secrets.TEST_JWT_SECRET }}
+          KIMI_API_KEY: ${{ secrets.TEST_KIMI_API_KEY }}
+          MISTRAL_API_KEY: ${{ secrets.TEST_MISTRAL_API_KEY }}
+          NODE_ENV: test
+          E2E_TEST: true
+      - name: Start frontend server
+        # H25: Next standalone output deliberately excludes .next/static and
+        # public/ (the repo's own Dockerfile copies them explicitly). Without
+        # this copy, JS/CSS chunks 404 and client-rendered pages cannot
+        # hydrate in the e2e browser tests.
+        run: |
+          cp -r .next/static .next/standalone/.next/static
+          cp -r public .next/standalone/public
+          node .next/standalone/server.js &
+        env:
+          NODE_ENV: test
+          PORT: "3000"
+          API_BASE_URL: http://localhost:34567
+      - name: Wait for backend to be healthy
+        run: |
+          for i in $(seq 1 30); do
+            curl -sf http://localhost:34567/api/health && echo "Backend healthy" && exit 0
+            sleep 2
+          done
+          echo "Backend failed to start after 60s"
+          exit 1
+      - name: Wait for frontend to be ready
+        run: |
+          for i in $(seq 1 30); do
+            curl -sf -o /dev/null http://localhost:3000/ && echo "Frontend ready" && exit 0
+            sleep 2
+          done
+          echo "Frontend failed to start after 60s"
+          exit 1
+      - name: Install Playwright
+        run: npx playwright install --with-deps chromium
+      - name: Run e2e tests
+        # Only browser E2E specs; integration specs need the full worker stack
+        # and are run in the dedicated integration-tests job.
+        run: npx playwright test --grep-invert 'integration' --reporter=line
+        env:
+          DATABASE_URL: ${{ secrets.TEST_DATABASE_URL }}
+          NEXT_PUBLIC_API_URL: http://localhost:34567
+          REDIS_URL: ${{ secrets.TEST_REDIS_URL }}
+          REDIS_PASSWORD: ${{ secrets.TEST_REDIS_PASSWORD }}
+          E2E_TEST: true
+
+  integration-tests:
+    runs-on: ubuntu-latest
+    needs: [backend]
+    services:
+      postgres:
+        # LOW #66: Pin service images by digest for reproducible CI.
+        image: pgvector/pgvector:pg16@sha256:8a5f16c3c438d5654cb6f438a7866da05cc76bc44e330b5ea246a94516d6d370
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: password
+          POSTGRES_DB: cinematicai
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        # LOW #66: Pin service images by digest for reproducible CI.
+        image: redis:7@sha256:33d3a320585c78a71f509c68284a3423a0d790380931829e8abac44aaa31b8c0
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: backend/package-lock.json
+      - name: Install backend deps
+        run: cd backend && npm ci --frozen-lockfile
+      - name: Download backend artifact
+        if: github.ref == 'refs/heads/main'
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: backend-dist
+          path: backend/dist/
+      - name: Build backend (if no artifact)
+        if: github.ref != 'refs/heads/main'
+        run: cd backend && npx prisma generate && npm run build
+      - name: Run database migrations
+        run: cd backend && npx prisma migrate deploy
+        env:
+          DATABASE_URL: ${{ secrets.TEST_DATABASE_URL }}
+          REDIS_URL: ${{ secrets.TEST_REDIS_URL }}
+      - name: Run schema audit tests (M7 / REL-010)
+        run: cd backend && RUN_SCHEMA_SYNC=1 npx vitest run src/database/schema-audit.test.ts src/database/schema-sync.test.ts --reporter=verbose
+        env:
+          DATABASE_URL: ${{ secrets.TEST_DATABASE_URL }}
+          REDIS_URL: ${{ secrets.TEST_REDIS_URL }}
+      - name: Wait for services
+        run: |
+          for i in $(seq 1 30); do nc -z localhost 5432 && break || sleep 1; done
+          for i in $(seq 1 30); do nc -z localhost 6379 && break || sleep 1; done
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps chromium
+      - name: Install root deps (ioredis for token-budget test)
+        run: npm ci --frozen-lockfile
+      - name: Start backend server
+        run: cd backend && node dist/server.js &
+        env:
+          DATABASE_URL: ${{ secrets.TEST_DATABASE_URL }}
+          REDIS_URL: ${{ secrets.TEST_REDIS_URL }}
+          REDIS_PASSWORD: ${{ secrets.TEST_REDIS_PASSWORD }}
+          API_SECRET: ${{ secrets.TEST_API_SECRET }}
+          ADMIN_API_KEY: ${{ secrets.TEST_ADMIN_API_KEY }}
+          JWT_SECRET: ${{ secrets.TEST_JWT_SECRET }}
+          KIMI_API_KEY: ${{ secrets.TEST_KIMI_API_KEY }}
+          MISTRAL_API_KEY: ${{ secrets.TEST_MISTRAL_API_KEY }}
+          NODE_ENV: test
+          E2E_TEST: true
+          PORT: "34567"
+      - name: Start worker
+        run: cd backend && node dist/queue/workers/run-worker.js &
+        env:
+          DATABASE_URL: ${{ secrets.TEST_DATABASE_URL }}
+          REDIS_URL: ${{ secrets.TEST_REDIS_URL }}
+          REDIS_PASSWORD: ${{ secrets.TEST_REDIS_PASSWORD }}
+          API_SECRET: ${{ secrets.TEST_API_SECRET }}
+          ADMIN_API_KEY: ${{ secrets.TEST_ADMIN_API_KEY }}
+          JWT_SECRET: ${{ secrets.TEST_JWT_SECRET }}
+          KIMI_API_KEY: ${{ secrets.TEST_KIMI_API_KEY }}
+          MISTRAL_API_KEY: ${{ secrets.TEST_MISTRAL_API_KEY }}
+          NODE_ENV: test
+          E2E_TEST: true
+      - name: Wait for backend to be healthy
+        run: |
+          for i in $(seq 1 30); do
+            curl -sf http://localhost:34567/api/health && echo "Backend healthy" && break
+            sleep 2
+          done
+      - name: Run integration E2E tests
+        run: npx playwright test e2e/story-worker.integration.spec.ts e2e/token-budget-race.integration.spec.ts --reporter=line
+        env:
+          DATABASE_URL: ${{ secrets.TEST_DATABASE_URL }}
+          REDIS_URL: ${{ secrets.TEST_REDIS_URL }}
+          REDIS_PASSWORD: ${{ secrets.TEST_REDIS_PASSWORD }}
+          NEXT_PUBLIC_API_URL: http://localhost:34567
+          E2E_TEST: true
+
+  validate-prod-env:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: backend/package-lock.json
+      - name: Install backend deps
+        run: cd backend && npm ci --frozen-lockfile
+      - name: Build backend
+        run: cd backend && npx prisma generate && npm run build
+      - name: Validate production env shape
+        run: |
+          cd backend
+          # Non-vacuous placeholder-rejection test. Each scenario starts from a
+          # fully-valid production env and sets exactly ONE placeholder var,
+          # asserting that validation rejects THAT var by name (e.envName). The
+          # previous version passed on ANY EnvValidationError regardless of which
+          # var triggered it, so it could not detect a regression that stopped
+          # catching a specific placeholder. A fresh require per scenario resets
+          # validateAndLoadEnv's module-level cache.
+          node -e "
+            const envPath = require.resolve('./dist/config/env.js');
+            const base = {
+              NODE_ENV: 'production',
+              DATABASE_URL: 'postgresql://cinematicai:Str0ngDBPassw0rd@postgres.internal:5432/cinematicai',
+              REDIS_URL: 'redis://redis.internal:6379',
+              REDIS_PASSWORD: 'Str0ngRedisPassw0rd',
+              API_SECRET: 'a'.repeat(64),
+              ADMIN_API_KEY: 'b'.repeat(64),
+              JWT_SECRET: 'c'.repeat(64),
+            };
+            const scenarios = [
+              ['DATABASE_URL', 'postgresql://user:password@host:port/db'],
+              ['REDIS_PASSWORD', 'changeme'],
+              ['API_SECRET', 'replace-me'],
+              ['ADMIN_API_KEY', 'your-api-key'],
+              ['JWT_SECRET', 'test-key'],
+            ];
+            let failures = 0;
+            for (const s of scenarios) {
+              const name = s[0], value = s[1];
+              delete require.cache[envPath];
+              const m = require(envPath);
+              for (const k of Object.keys(base)) process.env[k] = base[k];
+              process.env[name] = value;
+              try {
+                m.validateAndLoadEnv();
+                console.log('FAIL: ' + name + ' placeholder was NOT rejected');
+                failures++;
+              } catch (e) {
+                if (e && e.name === 'EnvValidationError' && e.envName === name) {
+                  console.log('PASS: ' + name + ' rejected (envName=' + e.envName + ')');
+                } else {
+                  console.log('FAIL: ' + name + ' -> name=' + (e && e.name) + ' envName=' + (e && e.envName) + ' msg=' + (e && e.message));
+                  failures++;
+                }
+              }
+            }
+            process.exit(failures === 0 ? 0 : 1);
+          "
+
+  quality-gate:
+    runs-on: ubuntu-latest
+    needs: [commitlint, backend, frontend, e2e, integration-tests, validate-prod-env, migration-test, schema-audit, hnsw-index]
+    if: always()
+    steps:
+      - name: Verify
+        run: |
+          # commitlint only runs on pull_request (see its job-level `if`). On a
+          # push to main it is legitimately "skipped" — that must NOT fail the
+          # gate (previously the gate required "success" and failed every push).
+          if [ "${{ needs.commitlint.result }}" != "success" ] && [ "${{ needs.commitlint.result }}" != "skipped" ]; then
+            echo "Commit lint failed (result: ${{ needs.commitlint.result }})"
+            exit 1
+          fi
+          if [ "${{ needs.migration-test.result }}" != "success" ]; then
+            echo "Migration test failed"
+            exit 1
+          fi
+          if [ "${{ needs.backend.result }}" != "success" ]; then
+            echo "Backend checks failed"
+            exit 1
+          fi
+          if [ "${{ needs.frontend.result }}" != "success" ]; then
+            echo "Frontend checks failed"
+            exit 1
+          fi
+          if [ "${{ needs.e2e.result }}" != "success" ]; then
+            echo "E2E tests failed"
+            exit 1
+          fi
+          if [ "${{ needs.integration-tests.result }}" != "success" ]; then
+            echo "Integration tests failed"
+            exit 1
+          fi
+          if [ "${{ needs.validate-prod-env.result }}" != "success" ]; then
+            echo "Production env validation failed"
+            exit 1
+          fi
+          if [ "${{ needs.schema-audit.result }}" != "success" ]; then
+            echo "Schema audit tests failed"
+            exit 1
+          fi
+          if [ "${{ needs.hnsw-index.result }}" != "success" ]; then
+            echo "HNSW index tests failed"
+            exit 1
+          fi
+          echo "All quality checks passed"

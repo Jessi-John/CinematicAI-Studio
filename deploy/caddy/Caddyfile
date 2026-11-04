@@ -1,0 +1,78 @@
+# Caddy v2 configuration for CinematicAI Studio.
+#
+# Caddy auto-provisions Let's Encrypt certs and renews them.
+#
+# This file is written for the Caddy container in docker-compose.prod.yml.
+# Upstreams use Docker Compose service names (backend, frontend). If you run
+# Caddy directly on the host instead, change the reverse_proxy targets to
+# http://127.0.0.1:34567 and http://127.0.0.1:3000.
+#
+# Usage with Docker Compose:
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+#
+# Usage on the host:
+#   sudo apt install -y caddy
+#   sudo cp deploy/caddy/Caddyfile /etc/caddy/Caddyfile
+#   # Edit .env: set CADDY_HOST=yourdomain.com
+#   sudo systemctl restart caddy
+
+{$CADDY_HOST:localhost} {
+    # Encode responses to gzip
+    encode zstd gzip
+
+    # Security headers — defense in depth
+    header {
+        # HSTS — 1 year, include subdomains, preloadable
+        Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+        # Prevent MIME sniffing
+        X-Content-Type-Options "nosniff"
+        # Don't allow embedding in iframes
+        X-Frame-Options "DENY"
+        # Strict referrer
+        Referrer-Policy "strict-origin-when-cross-origin"
+        # Disable dangerous browser features
+        Permissions-Policy "geolocation=(), microphone=(), camera=()"
+        # Remove server header
+        -Server
+    }
+
+    # NOTE: Caddy's stock build does not include a rate_limit directive.
+    # Backend rate-limiters (Redis-backed) are the authoritative protection.
+
+    # API routes → backend service
+    reverse_proxy /api/* http://backend:34567 {
+        # Pass the real client IP and protocol so the backend can enforce
+        # secure cookies and IP-based rate limits correctly.
+        header_up X-Real-IP {remote_host}
+        header_up X-Forwarded-For {remote_host}
+        header_up X-Forwarded-Proto {scheme}
+        # Overwrite (not append) X-Forwarded-Host with the validated site host.
+        # Caddy only serves requests whose Host matches {$CADDY_HOST}, so {host}
+        # is the legitimate public host. Without this, a client-supplied
+        # X-Forwarded-Host passed straight through to the backend, letting an
+        # attacker poison the host in absolute URLs (e.g. the HMAC-signed sseUrl).
+        header_up X-Forwarded-Host {host}
+        # Don't buffer SSE — let the connection stream through
+        flush_interval -1
+        # Long timeouts for in-flight story generation
+        transport http {
+            dial_timeout 5s
+            response_header_timeout 600s
+            read_timeout 600s
+            write_timeout 600s
+        }
+    }
+
+    # Everything else → frontend service
+    reverse_proxy http://frontend:3000 {
+        header_up X-Real-IP {remote_host}
+        header_up X-Forwarded-For {remote_host}
+        header_up X-Forwarded-Proto {scheme}
+        header_up X-Forwarded-Host {host}
+    }
+}
+
+# Optional: dedicated metrics subdomain (admin only)
+# {$CADDY_METRICS_HOST:metrics.localhost} {
+#     reverse_proxy http://127.0.0.1:34567/metrics
+# }

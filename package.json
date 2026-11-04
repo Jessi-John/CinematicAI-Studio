@@ -1,0 +1,93 @@
+{
+  "name": "cinematicai-studio",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint",
+    "typecheck": "tsc --noEmit",
+    "typecheck:all": "tsc --noEmit -p tsconfig.test.json",
+    "test": "vitest run && npm run test:backend",
+    "test:backend": "cd backend && npm test",
+    "test:e2e": "docker compose -f docker-compose.yml -f docker-compose.e2e.yml up -d && node scripts/wait-for-stack.js && playwright test",
+    "test:e2e:ui": "playwright test --ui",
+    "test:e2e:full": "playwright test e2e/story-generation.spec.ts --project=chromium",
+    "test:e2e:with-stack": "docker compose -f docker-compose.yml -f docker-compose.e2e.yml up -d && node scripts/wait-for-stack.js && playwright test; EXIT_CODE=$?; docker compose -f docker-compose.yml -f docker-compose.e2e.yml down; exit $EXIT_CODE",
+    "prepare": "husky || true",
+    "secrets:check": "bash scripts/check-secrets.sh",
+    "ci:local": "node scripts/ci-local.js",
+    "release": "standard-version && node scripts/sync-version.mjs && git add backend/package.json && git commit --amend --no-edit",
+    "release:dry-run": "standard-version --dry-run"
+  },
+  "standard-version": {
+    "scripts": {
+      "postbump": "node scripts/sync-version.mjs"
+    },
+    "commitAll": true
+  },
+  "lint-staged": {
+    "app/**/*.{ts,tsx}": [
+      "eslint --fix"
+    ],
+    "components/**/*.{ts,tsx}": [
+      "eslint --fix"
+    ],
+    "hooks/**/*.{ts,tsx}": [
+      "eslint --fix"
+    ],
+    "lib/**/*.{ts,tsx}": [
+      "eslint --fix"
+    ],
+    "e2e/**/*.ts": [
+      "eslint --fix"
+    ],
+    "backend/src/**/*.ts": [
+      "eslint --fix --config backend/eslint.config.js"
+    ]
+  },
+  "dependencies": {
+    "@tanstack/react-query": "5.101.2",
+    "@tanstack/react-query-devtools": "5.101.2",
+    "framer-motion": "12.42.2",
+    "lucide-react": "1.23.0",
+    "next": "16.2.6",
+    "pino": "10.3.1",
+    "react": "19.2.4",
+    "react-dom": "19.2.4",
+    "zustand": "5.0.14"
+  },
+  "devDependencies": {
+    "@commitlint/cli": "19.8.1",
+    "@commitlint/config-conventional": "19.8.1",
+    "@next/bundle-analyzer": "16.2.10",
+    "@playwright/test": "1.61.1",
+    "@tailwindcss/postcss": "4.3.2",
+    "@testing-library/jest-dom": "6.9.1",
+    "@testing-library/react": "16.3.2",
+    "@testing-library/user-event": "14.6.1",
+    "@types/node": "20.19.43",
+    "@types/react": "19.2.17",
+    "@types/react-dom": "19.2.3",
+    "@vitejs/plugin-react": "4.7.0",
+    "@vitest/coverage-v8": "3.2.6",
+    "autoprefixer": "10.5.2",
+    "axe-core": "4.12.1",
+    "dotenv": "17.4.2",
+    "eslint": "9.39.4",
+    "eslint-config-next": "16.2.6",
+    "husky": "9.1.7",
+    "ioredis": "5.11.1",
+    "jsdom": "26.1.0",
+    "lint-staged": "15.5.2",
+    "standard-version": "9.5.0",
+    "tailwindcss": "4.3.2",
+    "typescript": "5.9.3",
+    "vitest": "3.2.6"
+  },
+  "overrides": {
+    "postcss": "^8.4.49",
+    "esbuild": "^0.28.1"
+  }
+}

@@ -1,0 +1,43 @@
+# ZAP baseline and API scan rules configuration.
+# Format: ruleid\talert_type\tstatus
+# status values: DEFAULT, IGNORE, WARN
+#
+# This file exists so the security workflow has a stable ruleset. Adjust
+# statuses as the application evolves; never IGNORE a rule without a
+# documented justification.
+ruleid	alert	status
+10010	Informational Disclosure in URL	DEFAULT
+10011	Informational Disclosure in Response	DEFAULT
+10012	Content-Type Header Missing	DEFAULT
+10015	Incomplete or No Cache-control Header Set	DEFAULT
+10017	Cross-Domain JavaScript Source File Include	DEFAULT
+10019	Content-Type Header Does Not Match Response Body	DEFAULT
+10020	X-Frame-Options Header	DEFAULT
+10021	X-Content-Type-Options Header Missing	DEFAULT
+10023	Information Disclosure in Debug Error Messages	DEFAULT
+10024	Information Disclosure in Response Body	DEFAULT
+10025	Information Disclosure in File Comments	DEFAULT
+10027	Information Disclosure in Suspicious Comments	DEFAULT
+10032	Viewstate Scanner	DEFAULT
+10040	Secure Pages Include Mixed Content	DEFAULT
+10045	Source Code Disclosure /WEB-INF folder	DEFAULT
+10055	CSP Scanner	DEFAULT
+10062	PII Disclosure	DEFAULT
+10096	Timestamp Disclosure	DEFAULT
+10097	Hash Disclosure	DEFAULT
+10098	Cross-Domain Misconfiguration	DEFAULT
+10105	Weak Authentication Method	DEFAULT
+10109	Modern Web Application	DEFAULT
+10202	Absence of Anti-CSRF Tokens	DEFAULT
+2	Private IP Disclosure	DEFAULT
+3	Session ID in URL Rewrite	DEFAULT
+50001	Script Served From Malicious Domain	DEFAULT
+90001	Insecure JSF ViewState	DEFAULT
+90002	Java Serialization Object	DEFAULT
+90003	Sub Resource Integrity Attribute Missing	DEFAULT
+90004	Insufficient Site Isolation Config	DEFAULT
+90005	Insufficient Site Isolation Config	DEFAULT
+90011	Charset Mismatch	DEFAULT
+90022	Application Error Disclosure	DEFAULT
+90033	Lazy Load Request	DEFAULT
+90034	Cloud Metadata Potentially Exposed	DEFAULT
