@@ -593,10 +593,10 @@ test.describe('Scene editing with optimistic locking', () => {
       headers: { Cookie: `access_token=${authToken}` },
     });
     const verifyBody = (await verify.json()) as {
-      data?: { episodes?: Array<{ scenes?: Array<{ narrationText?: string }> }> };
+      data?: { episodes?: Array<{ scenes?: Array<{ narration?: { text?: string } }> }> };
     };
     const persisted = verifyBody.data?.episodes?.[0]?.scenes?.find((s) => s.number === 1);
-    expect(persisted?.narrationText).toBe('Updated narration after optimistic-lock e2e check.');
+    expect(persisted?.narration?.text).toBe('Updated narration after optimistic-lock e2e check.');
   });
 
   test('rejects invalid narration (too short) with 400 before any version check', async ({ request }) => {

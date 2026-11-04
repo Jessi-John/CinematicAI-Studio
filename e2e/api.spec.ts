@@ -122,7 +122,7 @@ test.describe('Story API Contract', () => {
           return body.data.data.storyId;
         }
         if (body.data?.state === 'failed') {
-          throw new Error(`Story generation job ${jobId} failed`);
+          throw new Error(`Story generation job ${jobId} failed: ${JSON.stringify(body)}`);
         }
       }
       await new Promise((r) => setTimeout(r, 1000));

@@ -14,6 +14,7 @@ import { hasCopyrightHit, scanObject } from '../../../../lib/copyright-filter.js
 import { logFallback } from '../../../../services/generation-logger.js';
 import { sanitizeFreeOfHits } from '../helpers.js';
 import { logger } from '../../../../services/logger.js';
+import { cannedModeEnabled } from '../../../../config/env.js';
 import {
   claimConceptTokens,
   extractClaimTokens,
@@ -103,8 +104,11 @@ export async function stage2Blueprint(
     // Hard in-flight collision check: claim this blueprint's significant title
     // words + protagonist-name tokens. A conflict means another concurrent job
     // owns the motif — regenerate with the conflicting tokens as constraints.
+    // Canned E2E mode picks titles from a fixed list and ignores avoidance
+    // constraints, so earlier claims would abort every later generation;
+    // bypass only the hard gate there (production behavior is unchanged).
     const claimTokens = extractClaimTokens(blueprint.title, blueprint.protagonistName);
-    const conflicts = await claimConceptTokens(ctx.jobId, claimTokens);
+    const conflicts = cannedModeEnabled() ? [] : await claimConceptTokens(ctx.jobId, claimTokens);
     if (conflicts.length === 0) break;
     attempt += 1;
     logger.warn(
