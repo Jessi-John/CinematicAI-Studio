@@ -1,5 +1,26 @@
 # Deployment Guide
 
+## Production checklist
+
+Before exposing the stack:
+
+- [ ] `secrets/` contains fresh values from `bash scripts/generate-secrets.sh --write`, plus at least one AI provider key.
+- [ ] `.env` sets `CADDY_HOST`, `DISABLE_REGISTRATION=true`, a strong `INVITE_CODE`, and the public `CORS_ORIGINS`.
+- [ ] `ALLOW_INSECURE_LOCAL_HTTP` is false (the production override enforces this).
+- [ ] Ports 80 and 443 are open; the backend is reachable only through Caddy.
+- [ ] Backups are installed and a restore has been tested.
+- [ ] `METRICS_ALLOWED_CIDRS` is narrowed if Prometheus has a fixed source address.
+- [ ] Alerting (`ALERT_WEBHOOK_URL`) and log retention are configured.
+
+## Backups
+
+The scripts in `deploy/backup/` dump PostgreSQL and Redis, verify the dumps,
+apply retention, and optionally upload to S3 with GPG or SSE-KMS encryption.
+Install the scripts and `deploy/backup/cinematicai-backup.cron`; set
+`PG_CONTAINER` and `REDIS_CONTAINER` in the cron file to the actual Compose
+container names for your project, and set `ENV_FILE` to the deployment env file.
+Test a restore before relying on the schedule.
+
 ## Database Migration Rollback Plan
 
 ### Automated protection (CI-enforced)
@@ -59,15 +80,29 @@ changes). Recovery procedure:
 
 ## Horizontal Scaling
 
-`docker compose up --scale` is now supported. The ioredis DNS caching issue
-was fixed in `lib/create-redis.ts` by using `dnsLookup` with `all: true +
-verbatim: true`, forcing fresh DNS resolution on every connection. Static IPs
-have been removed from docker-compose.yml.
+The ioredis DNS caching issue is fixed in
+`backend/src/lib/create-redis.ts` by using `dnsLookup` with
+`all: true + verbatim: true`, forcing fresh DNS resolution on every connection.
+Static IPs have been removed from `docker-compose.yml`.
 
-### To scale horizontally:
+`docker compose up --scale` does not work with the default file because
+`backend` and `worker` publish fixed host ports (`127.0.0.1:34567`, `3001`, and
+`3002`); a second replica fails with a port conflict. Use a small override that
+removes published ports, then put a load balancer in front and update the
+worker metrics scrape configuration:
+
+```yaml
+# docker-compose.scale.yml
+services:
+  backend:
+    ports: []
+  worker:
+    ports: []
+```
 
 ```bash
-docker compose up --scale backend=3 --scale worker=5 -d
+docker compose -f docker-compose.yml -f docker-compose.scale.yml \
+  up -d --scale backend=3 --scale worker=5
 ```
 
 For production Kubernetes/Docker Swarm deployments:
@@ -108,15 +143,16 @@ the whole stack goes down.
 Repair (verified during the audit):
 
 ```bash
-docker stop youtube-redis-1
-docker run --rm -v youtube_redis_data:/data redis:7-alpine sh -c \
+docker compose stop redis
+docker compose run --rm --entrypoint sh redis -c \
   'echo y | redis-check-aof --fix /data/appendonlydir/appendonly.aof.manifest'
 docker compose up -d redis
 ```
 
-This truncates the torn bytes (typically a few hundred bytes) and Redis starts
-cleanly. Consider periodic RDB snapshots (`--save 60 1000`) as the fast
-recovery path for larger datasets.
+This uses the Compose project's own container and volume names instead of a
+hard-coded project directory. It truncates the torn bytes (typically a few
+hundred bytes) and Redis starts cleanly. Consider periodic RDB snapshots
+(`--save 60 1000`) as the fast recovery path for larger datasets.
 
 The `redis` service command now runs an AOF repair guard
 (`deploy/redis/redis-aof-guard.sh`) automatically before `redis-server` starts.
@@ -130,8 +166,9 @@ been disabled.
 `postgres` and `redis` run ONLY on the `internal: true` network. On Docker
 Desktop (verified on Windows), host port publishing to such containers does
 NOT forward (`127.0.0.1:6379` and `127.0.0.1:15432` are unreachable), while
-on Linux Docker it works. Dev workflows that need direct host access should
-use `docker exec` instead of host-mapped ports.
+on Linux Docker it works. For host-process development, use the full Docker
+stack or native PostgreSQL/Redis. For one-off inspection, use
+`docker compose exec` instead of host-mapped ports.
 
 ## Regeneration timeout scaling
 

@@ -206,7 +206,7 @@ describe('EpisodePage', () => {
     HTMLAnchorElement.prototype.click = clickSpy;
     const originalCreateObjectURL = (URL as unknown as Record<string, unknown>).createObjectURL;
     const originalRevokeObjectURL = (URL as unknown as Record<string, unknown>).revokeObjectURL;
-    const createObjectURL = vi.fn(() => 'blob:mock');
+    const createObjectURL = vi.fn((_blob: Blob) => 'blob:mock');
     const revokeObjectURL = vi.fn();
     Object.defineProperty(URL, 'createObjectURL', { value: createObjectURL, configurable: true });
     Object.defineProperty(URL, 'revokeObjectURL', { value: revokeObjectURL, configurable: true });

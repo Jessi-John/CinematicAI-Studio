@@ -8,6 +8,9 @@ on:
     - cron: '0 0 * * 0'  # Weekly
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   zap-scan:
     runs-on: ubuntu-24.04

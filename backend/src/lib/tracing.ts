@@ -12,7 +12,7 @@
  *
  * Environment variables:
  *   OTEL_EXPORTER_OTLP_ENDPOINT - OTLP collector endpoint (default: http://localhost:4318/v1/traces)
- *   OTEL_SERVICE_NAME - Service name for traces (default: winston-ai-backend)
+ *   OTEL_SERVICE_NAME - Service name for traces (default: cinematicai-backend)
  */
 
 import { NodeSDK } from '@opentelemetry/sdk-node';
@@ -26,7 +26,7 @@ function getOtelEndpoint(): string {
 }
 
 function getOtelServiceName(): string {
-  return process.env.OTEL_SERVICE_NAME || 'winston-ai-backend';
+  return process.env.OTEL_SERVICE_NAME || 'cinematicai-backend';
 }
 
 const sdk = new NodeSDK({
@@ -50,7 +50,7 @@ sdk.start();
 
 logger.info({
   endpoint: process.env.OTEL_EXPORTER_OTLP_ENDPOINT || 'http://localhost:4318/v1/traces',
-  service: process.env.OTEL_SERVICE_NAME || 'winston-ai-backend',
+  service: process.env.OTEL_SERVICE_NAME || 'cinematicai-backend',
 }, 'OpenTelemetry tracing initialized');
 
 // Graceful shutdown

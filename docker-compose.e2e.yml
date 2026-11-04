@@ -4,7 +4,7 @@
 # development or production operation.
 #
 # BOTH vars are SEC-CRITICAL:
-#   E2E_TEST=true     — bypasses auth rate limiters (unlimited login attempts)
+#   E2E_TEST=true     — bypasses auth, CSRF, and rate limiters
 #   STORY_TEST_MODE=canned — uses deterministic canned AI responses
 # They must NEVER be in docker-compose.yml's shared-env because shell env
 # var substitution can leak them into normal operation.

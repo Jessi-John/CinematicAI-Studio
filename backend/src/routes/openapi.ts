@@ -5,7 +5,7 @@
  * of truth for request validation. This module defines the OpenAPI 3.1 spec that
  * documents those contracts.
  *
- * Exposed at GET /api/docs (JSON) and GET /api/docs/ui (Swagger UI via Redoc).
+ * Exposed at GET /api/docs (JSON) and GET /api/docs/ui (Redoc).
  * The spec can be fed into OpenAPI-compatible tooling (Postman, Insomnia,
  * client generators) to catch client/server contract drift (#23).
  */
@@ -1144,7 +1144,7 @@ router.get('/', asyncMiddleware(verifyAdminAuth), asyncHandler(async (_req, res)
   res.json(openApiDoc);
 }));
 
-// GET /api/docs/ui — Swagger UI via Redoc. The Redoc bundle is loaded from
+// GET /api/docs/ui — Redoc UI. The Redoc bundle is loaded from
 // cdn.jsdelivr.net; the accompanying CSP relaxation that permits that CDN (and
 // the inline init script) is scoped to /api/docs only — see CRIT-14 in
 // server.ts. This is a deliberate, admin-only exception, not a global CSP weaken.

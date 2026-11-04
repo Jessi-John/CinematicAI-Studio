@@ -6,11 +6,11 @@
 #   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
 #
 # Before first deploy:
-#   1. Copy .env.example -> .env and fill in REAL secrets.
-#   2. Set DISABLE_REGISTRATION=true and INVITE_CODE to a strong random value.
-#   3. Set ALLOW_INSECURE_LOCAL_HTTP=false (or unset it).
-#   4. Set CADDY_HOST to your public domain.
-#   5. Open ports 80 and 443 on the host firewall.
+#   1. Copy .env.example -> .env and set non-secret options.
+#   2. Run bash scripts/generate-secrets.sh --write and place AI keys in secrets/.
+#   3. Set DISABLE_REGISTRATION=true and INVITE_CODE to a strong random value.
+#   4. Set CADDY_HOST to your public domain, then open ports 80 and 443.
+#   ALLOW_INSECURE_LOCAL_HTTP is forced to false below.
 
 services:
   caddy:
@@ -136,7 +136,7 @@ services:
     stop_grace_period: 60s
     environment:
       # Runtime API base for the BFF proxy — relative URLs through Caddy.
-      - API_BASE_URL=${API_BASE_URL:-http://backend:34567}
+      - API_BASE_URL=http://backend:34567
     secrets:
       - jwt_secret
 

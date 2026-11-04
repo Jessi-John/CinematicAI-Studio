@@ -104,6 +104,8 @@ services:
     # eviction maximises hit rate for the token-budget + blacklist cache
     # and the BullMQ queues without data loss (queues are persisted to AOF).
     # Override REDIS_MAXMEMORY via .env if a different cap is needed.
+    environment:
+      REDIS_MAXMEMORY: ${REDIS_MAXMEMORY:-1gb}
     # M71: AOF repair guard — run redis-check-aof --fix before startup so an
     # unclean shutdown does not leave Redis crash-looping on a torn AOF tail.
     command: sh -c 'REDIS_PASSWORD="$$(cat /run/secrets/redis_password)" && sh /usr/local/bin/redis-aof-guard.sh --appendonly yes --requirepass "$$REDIS_PASSWORD" --maxmemory "$${REDIS_MAXMEMORY:-1gb}" --maxmemory-policy allkeys-lru'
@@ -214,7 +216,7 @@ services:
       PORT: 34567
       CORS_ORIGINS: http://localhost:3000
       RUN_WORKER_INPROCESS: "false"
-      OTEL_SERVICE_NAME: winston-ai-backend
+      OTEL_SERVICE_NAME: cinematicai-backend
       ALERT_WEBHOOK_URL: ${ALERT_WEBHOOK_URL:-}
     secrets:
       - database_url
@@ -272,7 +274,7 @@ services:
         condition: service_started
     environment:
       <<: *shared-env
-      OTEL_SERVICE_NAME: winston-ai-worker
+      OTEL_SERVICE_NAME: cinematicai-worker
       WORKER_LOCK_DURATION_MS: "1000000"
       WORKER_HEALTH_BIND: "0.0.0.0"
       WORKER_HEALTH_PORT: "3001"

@@ -11,7 +11,8 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { readFileSync, globSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
+import { globFiles } from './glob-files.js';
 import { resolve } from 'node:path';
 
 const SRC_ROOT = resolve(__dirname, '..');
@@ -107,7 +108,7 @@ function extractMockedEnvKeys(content: string): EnvMock | null {
 describe('Env-mock invariants', () => {
   const shape = loadEnvShape();
   // TEST_ROOT already IS backend/src — the glob must not prepend another src/.
-  const files = globSync('**/*.test.ts', { cwd: TEST_ROOT });
+  const files = globFiles('**/*.test.ts', { cwd: TEST_ROOT });
   const offenders: { file: string; missing: string[]; obsolete: string[] }[] = [];
 
   // C1 self-guard: a broken glob root must fail loudly, not vacuously pass.

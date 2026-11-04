@@ -124,7 +124,7 @@ app.use(
 );
 
 // CRIT-14: Scope the CDN script-src relaxation to /api/docs only.
-// The Swagger UI loads Redoc from cdn.jsdelivr.net. Applying this
+// The docs UI loads Redoc from cdn.jsdelivr.net. Applying this
 // globally would weaken CSP for all backend responses; scoping it to
 // the docs path limits the attack surface to the admin-only docs UI.
 app.use(
@@ -235,7 +235,7 @@ app.use('/api', publicConfigRouter);
 // Alertmanager webhook receiver — separate bearer-token auth, not user/admin auth.
 app.use('/api/alerts', alertsRouter);
 
-// Fix #26: OpenAPI 3.1 spec at GET /api/docs (JSON) and GET /api/docs/ui (Swagger UI).
+// Fix #26: OpenAPI 3.1 spec at GET /api/docs (JSON) and GET /api/docs/ui (Redoc).
 // Admin-only — enforced inside openapiRouter via verifyAdminAuth.
 app.use('/api/docs', openapiRouter);
 
@@ -283,14 +283,12 @@ for (const prefix of API_PREFIXES) {
   app.use(`${prefix}/admin`, adminRouter);
 }
 
-// L4-METRICS-NETWORK: metrics are now accessible from BOTH localhost
-// (for `curl http://localhost:34567/metrics` during local debugging)
-// AND from the Docker bridge network. The compose file pins every
-// service to the static subnet 172.20.0.0/16, so Prometheus scraping
-// `backend:34567/metrics` (resolves to 172.20.0.40) gets through.
-// IPs outside those ranges still get 401 — random host-machine
-// processes can't scrape the metrics without being inside the
-// container network. The ACL is implemented in a dedicated module
+// L4-METRICS-NETWORK: metrics are accessible from localhost (for
+// `curl http://localhost:34567/metrics` during local debugging) and from
+// private Docker networks. Compose assigns dynamic private subnets, so the
+// ACL matches loopback plus RFC1918 ranges (configurable with
+// METRICS_ALLOWED_CIDRS) rather than a fixed subnet. Other addresses get
+// 401. The ACL is implemented in a dedicated module
 // (server/metrics-acl.ts) so it can be unit-tested without spinning
 // up a server.
 import { metricsRequestAllowed } from './server/metrics-acl.js';

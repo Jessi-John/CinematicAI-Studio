@@ -12,7 +12,8 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { readFileSync, globSync, lstatSync } from 'node:fs';
+import { readFileSync, lstatSync } from 'node:fs';
+import { globFiles } from './glob-files.js';
 import { resolve } from 'node:path';
 
 const REPO_ROOT = resolve(__dirname, '..', '..', '..');
@@ -79,18 +80,6 @@ interface AllowlistEntry {
  */
 const ALLOWLIST: AllowlistEntry[] = [
   {
-    file: 'AGENTS.md',
-    line: 1,
-    pattern: '*',
-    reason: 'AGENTS.md is the project changelog and intentionally references historical terms when documenting past fixes.',
-  },
-  {
-    file: 'backend/src/config/env.ts',
-    line: 0,
-    pattern: 'ADMIN_PASSWORD',
-    reason: 'Explicit comment documenting that ADMIN_USERNAME/ADMIN_PASSWORD were removed.',
-  },
-  {
     file: 'backend/src/test-quality/env-mock-invariants.test.ts',
     line: 1,
     pattern: '*',
@@ -101,12 +90,6 @@ const ALLOWLIST: AllowlistEntry[] = [
     line: 1,
     pattern: '*',
     reason: 'This invariant test defines the forbidden patterns it scans for.',
-  },
-  {
-    file: 'cure.md',
-    line: 1,
-    pattern: '*',
-    reason: 'Historical issue log — references old credentials and provider names when documenting past fixes.',
   },
   {
     file: '.env',
@@ -153,7 +136,7 @@ function isAllowlisted(
     // A line number of 0 means "any line" — the allowlist entry matches the
     // pattern anywhere in the file. This avoids brittle line-number drift.
     const lineMatches = entry.line === 0 || line === entry.line;
-    return patternName.includes(entry.pattern) && lineMatches;
+    return entry.pattern === patternName && lineMatches;
   });
 }
 
@@ -167,7 +150,7 @@ describe('Prose / documentation invariants', () => {
   const offenders: Offense[] = [];
 
   for (const pattern of SCANNED_GLOBS) {
-    const files = globSync(pattern, { cwd: REPO_ROOT });
+    const files = globFiles(pattern, { cwd: REPO_ROOT });
     for (const file of files) {
       const rel = file.replace(/\\/g, '/');
       if (isExcluded(rel)) continue;

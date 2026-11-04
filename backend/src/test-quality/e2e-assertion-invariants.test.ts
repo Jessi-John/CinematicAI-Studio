@@ -15,7 +15,8 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { readFileSync, globSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
+import { globFiles } from './glob-files.js';
 import { resolve } from 'node:path';
 
 const REPO_ROOT = resolve(__dirname, '..', '..', '..');
@@ -119,7 +120,7 @@ function hasOverlyBroadStatusAssertion(block: TestBlock): boolean {
 }
 
 describe('E2E assertion-quality invariants', () => {
-  const files = globSync('*.spec.ts', { cwd: E2E_DIR });
+  const files = globFiles('*.spec.ts', { cwd: E2E_DIR });
   const consoleOffenders: { file: string; test: string; line: number }[] = [];
   const statusOffenders: { file: string; test: string; line: number }[] = [];
 

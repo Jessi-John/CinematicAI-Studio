@@ -12,7 +12,8 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { readFileSync, globSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
+import { globFiles } from './glob-files.js';
 import { resolve, dirname, sep } from 'node:path';
 
 const SRC_ROOT = resolve(__dirname, '..');
@@ -79,7 +80,7 @@ const ALLOWLIST_NO_MOCK = new Set<string>([
 
 describe('DB-isolation invariants', () => {
   // TEST_ROOT already IS backend/src — the glob must not prepend another src/.
-  const files = globSync('**/*.test.ts', { cwd: TEST_ROOT });
+  const files = globFiles('**/*.test.ts', { cwd: TEST_ROOT });
   const offenders: { file: string; imports: string[] }[] = [];
 
   // C1 self-guard: a broken glob root must fail loudly, not vacuously pass.

@@ -16,7 +16,8 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { readFileSync, globSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
+import { globFiles } from './glob-files.js';
 import { resolve } from 'node:path';
 
 const SRC_ROOT = resolve(__dirname, '..');
@@ -76,7 +77,7 @@ function isAllowlisted(relativePath: string): boolean {
 
 describe('AI calls must run inside a pipeline context', () => {
   // SRC_ROOT already IS backend/src — the glob must not prepend another src/.
-  const files = globSync('**/*.ts', { cwd: SRC_ROOT });
+  const files = globFiles('**/*.ts', { cwd: SRC_ROOT });
   const offenders: string[] = [];
 
   // C1 self-guard: a broken glob root must fail loudly, not vacuously pass.

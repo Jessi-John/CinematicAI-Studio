@@ -1,7 +1,7 @@
 # CinematicAI Studio — Architecture Diagrams
 
-> Generated from exhaustive line-by-line analysis of every source file in the repository.
-> See `AUDIT-2026-07-19.md` for the full audit report.
+> Generated from the current source tree. Update this document when the
+> architecture or security posture changes.
 
 ---
 
@@ -129,17 +129,16 @@ graph LR
     S2 --> S4
     S3["S3: Character Bible<br/>🤖 1 call (4 retries)"] --> S5
     S4["S4: World Bible<br/>🤖 1-2 calls"] --> S5
-    S5["S5: Episodes 10×5<br/>🤖 10-20 calls"] --> S6
-    S6["S6: Story Build<br/>🤖 0 calls"] --> S7
-    S7["S7: Humanize<br/>🤖 0 calls"] --> S8
+    S5["S5: Episodes + Story Build<br/>🤖 10-20 calls"] --> S7
+    S7["S7: Humanize<br/>🤖 varies"] --> S8
     S8{"S8: Quality Judge<br/>🤖 1 call"}
     S8 -->|"✅ ≥ threshold"| S9
     S8 -->|"❌ < threshold"| S7
-    S9["S9: Image/Video Prompts<br/>🤖 0 calls"] --> S10
+    S9["S9: SEO Metadata<br/>🤖 1 call"] --> S10
     S10{"S10: Copyright Sweep<br/>🤖 0 calls"}
     S10 -->|"✅ Clean"| S11
     S10 -->|"❌ Blocked"| REJECT["🚫 Rejected"]
-    S11["S11: SEO Metadata<br/>🤖 1 call"] --> OUT["📚 Complete Story"]
+    S11["S11: Embedding<br/>🤖 1 call"] --> OUT["📚 Complete Story"]
 
     style S0 fill:#f39c12,color:#000
     style S5 fill:#e74c3c,color:#fff
@@ -148,6 +147,9 @@ graph LR
     style REJECT fill:#c0392b,color:#fff
     style OUT fill:#2ecc71,color:#fff
 ```
+
+Stage numbers are historical: there is no `stage6` module; story assembly
+happens at the end of S5. The pipeline has S0 plus S1-S5 and S7-S11 (11 stages).
 
 ### Pipeline Checkpoint & Retry
 
@@ -219,7 +221,7 @@ sequenceDiagram
         BE->>BE: bcrypt.compare(password, DUMMY_HASH)
         Note right of BE: ~237ms constant-time
     end
-    BE-->>U: Set-Cookie: jwt=<token>
+    BE-->>U: Set-Cookie: access_token=<jwt>; HttpOnly; SameSite=Strict
 
     Note over U,R: Protected Request
     U->>BE: PATCH /api/stories/:id
@@ -759,14 +761,13 @@ graph LR
     end
 
     subgraph "Improvements Needed ⚠️"
-        I1["No explicit XSS sanitization"]
-        I2["No CSP on frontend"]
-        I3["No account lockout"]
-        I4["No global IP rate limit"]
+        I1["No account lockout"]
+        I2["No MFA"]
+        I3["No CSP violation reporting endpoint"]
+        I4["Metrics ACL trusts RFC1918 by default"]
     end
 ```
 
 ---
 
-*Generated from exhaustive line-by-line analysis of all 420+ files in the repository.*
-*See `AUDIT-2026-07-19.md` for the complete audit report.*
+*Generated from the current source tree. Revalidate security claims after architectural changes.*

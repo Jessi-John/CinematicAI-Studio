@@ -82,7 +82,16 @@ vi.mock('../../database/prisma.js', () => {
 });
 
 import { updateSceneNarration, updateEpisodeMeta } from './write.js';
-import { __reset, __sceneCalls, __episodeCalls } from '../../database/prisma.js';
+import * as prismaModule from '../../database/prisma.js';
+
+// The mocked module below adds test-only helpers that are not part of the
+// real prisma module's public surface, so narrow the namespace import to the
+// helpers this suite uses.
+const { __reset, __sceneCalls, __episodeCalls } = prismaModule as unknown as {
+  __reset: () => void;
+  __sceneCalls: () => unknown[];
+  __episodeCalls: () => unknown[];
+};
 
 describe('L14: scene/episode edits with validation and optimistic locking', () => {
   beforeEach(() => {

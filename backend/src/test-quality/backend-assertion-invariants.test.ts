@@ -17,7 +17,8 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { readFileSync, globSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
+import { globFiles } from './glob-files.js';
 import { resolve } from 'node:path';
 
 const REPO_ROOT = resolve(__dirname, '..', '..');
@@ -127,7 +128,7 @@ function hasBroadStatusAssertion(block: TestBlock): boolean {
 }
 
 describe('Backend assertion-quality invariants', () => {
-  const files = globSync('**/*.test.ts', { cwd: BACKEND_SRC_DIR });
+  const files = globFiles('**/*.test.ts', { cwd: BACKEND_SRC_DIR });
   const offenders: { file: string; test: string; line: number }[] = [];
 
   for (const file of files) {

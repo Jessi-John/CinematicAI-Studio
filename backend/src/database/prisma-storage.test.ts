@@ -390,9 +390,11 @@ describe('getAllStories', () => {
     const result = await getAllStories({ userId: 'user-1', sortBy: 'title', limit: 1 });
     expect(result.hasMore).toBe(true);
     expect(typeof result.nextCursor).toBe('string');
+    const cursor = result.nextCursor;
+    if (cursor === undefined) throw new Error('expected a nextCursor for a paginated result');
     // The cursor should be decodable and round-trip to the same sort
     const { getAllStories: getAllStories2 } = await import('./prisma-storage.js');
-    await getAllStories2({ userId: 'user-1', sortBy: 'title', cursor: result.nextCursor });
+    await getAllStories2({ userId: 'user-1', sortBy: 'title', cursor });
     const args = mockFindMany.mock.calls[1]?.[0] as { where: { OR: unknown[] } };
     expect(args.where.OR).toEqual([
       { title: { gt: 'Alpha Story' } },
