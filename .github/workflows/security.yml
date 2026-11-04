@@ -55,6 +55,7 @@ jobs:
           target: 'http://localhost:34567'
           rules_file_name: '.zap/rules.tsv'
           cmd_options: '-a'
+          allow_issue_writing: false
 
       - name: Upload ZAP baseline report
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -76,6 +77,7 @@ jobs:
           target: 'http://localhost:34567'
           api_file: openapi.json
           rules_file_name: '.zap/rules.tsv'
+          allow_issue_writing: false
 
       - name: Upload ZAP API report
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

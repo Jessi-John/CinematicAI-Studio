@@ -28,6 +28,7 @@ if (!process.env.SHADOW_DATABASE_URL) {
   console.error('SHADOW_DATABASE_URL is required: `prisma migrate diff --from-migrations` replays the migration directory into a separate shadow database.');
   process.exit(2);
 }
+const SHADOW_DATABASE_URL = process.env.SHADOW_DATABASE_URL;
 
 function run(cmd, opts = {}) {
   console.log(`$ ${cmd}`);
@@ -47,8 +48,9 @@ try {
   run(`npx prisma migrate diff --from-migrations prisma/migrations --to-schema-datamodel prisma/schema.prisma --shadow-database-url '${SHADOW_DATABASE_URL}' --exit-code`);
 
   console.log('\n=== Migration integrity check PASSED ===');
-} catch {
+} catch (error) {
   console.error('\n=== Migration integrity check FAILED ===');
+  console.error(error && error.message ? error.message : error);
   console.error('Migration deploy or the drift check failed — see the output above for the root cause.');
   console.error('If migrations are out of sync, run `npx prisma migrate dev` locally to generate the missing migration.');
   process.exit(1);
