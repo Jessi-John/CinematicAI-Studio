@@ -96,14 +96,14 @@ jobs:
         run: docker build -t cinematicai-frontend:latest .
 
       - name: Run Trivy vulnerability scanner on backend image
-        uses: aquasecurity/trivy-action@6c175e9c4083fbb618cc6da5b37f66f57f96d0f8
+        uses: aquasecurity/trivy-action@cf5c088a69634cd13ccddc735d7926162c31f9a6
         with:
           image-ref: 'cinematicai-backend:latest'
           format: 'sarif'
           output: 'trivy-backend-results.sarif'
 
       - name: Run Trivy vulnerability scanner on frontend image
-        uses: aquasecurity/trivy-action@6c175e9c4083fbb618cc6da5b37f66f57f96d0f8
+        uses: aquasecurity/trivy-action@cf5c088a69634cd13ccddc735d7926162c31f9a6
         with:
           image-ref: 'cinematicai-frontend:latest'
           format: 'sarif'
@@ -127,6 +127,11 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Set up Docker Buildx
+        # --sbom/--provenance attestations are rejected by the default docker
+        # driver; setup-buildx creates a docker-container builder instead.
+        uses: docker/setup-buildx-action@18ce135bb5112fa8ce4ed6c17ab05699d7f3a5e0 # v4.4.1
 
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
@@ -154,7 +159,7 @@ jobs:
             --sbom=true \
             --provenance=true \
             -t cinematicai-backend:latest \
-            -o type=docker,dest=cinematicai-backend.tar \
+            -o type=oci,dest=cinematicai-backend.tar \
             ./backend
           echo "tar=cinematicai-backend.tar" >> $GITHUB_OUTPUT
 
@@ -165,7 +170,7 @@ jobs:
             --sbom=true \
             --provenance=true \
             -t cinematicai-frontend:latest \
-            -o type=docker,dest=cinematicai-frontend.tar \
+            -o type=oci,dest=cinematicai-frontend.tar \
             .
           echo "tar=cinematicai-frontend.tar" >> $GITHUB_OUTPUT
 

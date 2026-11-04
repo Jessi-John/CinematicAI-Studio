@@ -8,10 +8,9 @@
  * 4. Exits non-zero if any step fails
  *
  * Usage: node scripts/test-migrations.mjs
- * Requires: DATABASE_URL env var pointing to a throwaway test database.
- * Note: `prisma migrate diff --from-migrations` also requires a SHADOW
- * database (Prisma creates one automatically on Postgres; on restricted
- * hosts set SHADOW_DATABASE_URL).
+ * Requires: DATABASE_URL env var pointing to a throwaway test database, and
+ * SHADOW_DATABASE_URL env var for the `prisma migrate diff --from-migrations`
+ * shadow database (Prisma requires it explicitly for migration-dir diffs).
  */
 
 import { execSync } from 'node:child_process';
@@ -23,6 +22,10 @@ const BACKEND_DIR = fileURLToPath(new URL('../backend', import.meta.url));
 
 if (!process.env.DATABASE_URL) {
   console.error('DATABASE_URL is required and must point to a throwaway database.');
+  process.exit(2);
+}
+if (!process.env.SHADOW_DATABASE_URL) {
+  console.error('SHADOW_DATABASE_URL is required: `prisma migrate diff --from-migrations` replays the migration directory into a separate shadow database.');
   process.exit(2);
 }
 
@@ -41,7 +44,7 @@ try {
   // the Prisma schema. If they differ, a migration is missing or the
   // schema.prisma has un-migrated changes.
   console.log('\n=== Verifying schema drift ===');
-  run('npx prisma migrate diff --from-migrations prisma/migrations --to-schema-datamodel prisma/schema.prisma --exit-code');
+  run(`npx prisma migrate diff --from-migrations prisma/migrations --to-schema-datamodel prisma/schema.prisma --shadow-database-url '${SHADOW_DATABASE_URL}' --exit-code`);
 
   console.log('\n=== Migration integrity check PASSED ===');
 } catch {

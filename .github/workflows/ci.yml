@@ -60,12 +60,41 @@ jobs:
       - name: Generate Prisma client
         run: cd backend && npx prisma generate
       - name: Test migration integrity
+        # `prisma migrate diff --from-migrations` requires an explicit shadow
+        # database URL; on this throwaway service the built-in `postgres`
+        # maintenance database is a safe replay target.
         run: node scripts/test-migrations.mjs
         env:
           DATABASE_URL: postgresql://postgres:test@localhost:5432/cinematicai_test
+          SHADOW_DATABASE_URL: postgresql://postgres:test@localhost:5432/postgres
 
   schema-audit:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        # LOW #66: Pin service images by digest for reproducible CI.
+        image: pgvector/pgvector:pg16@sha256:8a5f16c3c438d5654cb6f438a7866da05cc76bc44e330b5ea246a94516d6d370
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: test-postgres-password-not-for-production
+          POSTGRES_DB: cinematicai
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        # LOW #66: Pin service images by digest for reproducible CI.
+        image: redis:7-alpine@sha256:b1addbe72465a718643cff9e60a58e6df1841e29d6d7d60c9a85d8d72f08d1a7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
@@ -77,47 +106,47 @@ jobs:
         run: cd backend && npm ci --frozen-lockfile
       - name: Generate Prisma client
         run: cd backend && npx prisma generate
-      - name: Create .env and Docker secrets for docker-compose
-        run: |
-          echo "DATABASE_URL=postgresql://postgres:${POSTGRES_PASSWORD}@localhost:15432/cinematicai" > .env
-          echo "REDIS_URL=redis://:${REDIS_PASSWORD}@localhost:6379" >> .env
-          echo "POSTGRES_PASSWORD=${POSTGRES_PASSWORD}" >> .env
-          echo "REDIS_PASSWORD=${REDIS_PASSWORD}" >> .env
-          mkdir -p secrets
-          write_secret() { printf '%s' "$2" > "secrets/$1"; }
-          write_secret postgres_password "$POSTGRES_PASSWORD"
-          write_secret redis_password "$REDIS_PASSWORD"
-          write_secret database_url "postgresql://postgres:${POSTGRES_PASSWORD}@postgres:5432/cinematicai?schema=public"
-          write_secret redis_url "redis://:${REDIS_PASSWORD}@redis:6379"
-          write_secret api_secret 'test-api-secret-not-for-production'
-          write_secret jwt_secret 'test-jwt-secret-not-for-production'
-          write_secret admin_api_key 'test-admin-api-key-not-for-production'
-          write_secret mistral_api_key 'test-mistral-api-key-not-for-production'
-          write_secret kimi_api_key 'test-kimi-api-key-not-for-production'
-          write_secret grafana_admin_password.txt 'test-grafana-password-not-for-production'
-          write_secret alert_receiver_token 'test-alert-token-not-for-production'
-          write_secret loki_tenant_id 'test-loki-tenant-id-not-for-production'
-        env:
-          POSTGRES_PASSWORD: test-postgres-password-not-for-production
-          REDIS_PASSWORD: test-redis-password-not-for-production
-      - name: Start docker-compose services
-        run: docker compose up -d postgres redis
       - name: Wait for services
         run: |
-          for i in $(seq 1 30); do nc -z localhost 15432 && break; sleep 1; done
+          for i in $(seq 1 30); do nc -z localhost 5432 && break; sleep 1; done
           for i in $(seq 1 30); do nc -z localhost 6379 && break; sleep 1; done
       - name: Run database migrations
         run: cd backend && npx prisma migrate deploy
         env:
-          DATABASE_URL: postgresql://postgres:test-postgres-password-not-for-production@localhost:15432/cinematicai
+          DATABASE_URL: postgresql://postgres:test-postgres-password-not-for-production@localhost:5432/cinematicai
       - name: Run schema audit tests
         run: cd backend && npm run test:schema
         env:
-          DATABASE_URL: postgresql://postgres:test-postgres-password-not-for-production@localhost:15432/cinematicai
-          REDIS_URL: redis://:test-redis-password-not-for-production@localhost:6379
+          DATABASE_URL: postgresql://postgres:test-postgres-password-not-for-production@localhost:5432/cinematicai
+          REDIS_URL: redis://localhost:6379
 
   hnsw-index:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        # LOW #66: Pin service images by digest for reproducible CI.
+        image: pgvector/pgvector:pg16@sha256:8a5f16c3c438d5654cb6f438a7866da05cc76bc44e330b5ea246a94516d6d370
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: test-postgres-password-not-for-production
+          POSTGRES_DB: cinematicai
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        # LOW #66: Pin service images by digest for reproducible CI.
+        image: redis:7-alpine@sha256:b1addbe72465a718643cff9e60a58e6df1841e29d6d7d60c9a85d8d72f08d1a7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
@@ -129,44 +158,19 @@ jobs:
         run: cd backend && npm ci --frozen-lockfile
       - name: Generate Prisma client
         run: cd backend && npx prisma generate
-      - name: Create .env and Docker secrets for docker-compose
-        run: |
-          echo "DATABASE_URL=postgresql://postgres:${POSTGRES_PASSWORD}@localhost:15432/cinematicai" > .env
-          echo "REDIS_URL=redis://:${REDIS_PASSWORD}@localhost:6379" >> .env
-          echo "POSTGRES_PASSWORD=${POSTGRES_PASSWORD}" >> .env
-          echo "REDIS_PASSWORD=${REDIS_PASSWORD}" >> .env
-          mkdir -p secrets
-          write_secret() { printf '%s' "$2" > "secrets/$1"; }
-          write_secret postgres_password "$POSTGRES_PASSWORD"
-          write_secret redis_password "$REDIS_PASSWORD"
-          write_secret database_url "postgresql://postgres:${POSTGRES_PASSWORD}@postgres:5432/cinematicai?schema=public"
-          write_secret redis_url "redis://:${REDIS_PASSWORD}@redis:6379"
-          write_secret api_secret 'test-api-secret-not-for-production'
-          write_secret jwt_secret 'test-jwt-secret-not-for-production'
-          write_secret admin_api_key 'test-admin-api-key-not-for-production'
-          write_secret mistral_api_key 'test-mistral-api-key-not-for-production'
-          write_secret kimi_api_key 'test-kimi-api-key-not-for-production'
-          write_secret grafana_admin_password.txt 'test-grafana-password-not-for-production'
-          write_secret alert_receiver_token 'test-alert-token-not-for-production'
-          write_secret loki_tenant_id 'test-loki-tenant-id-not-for-production'
-        env:
-          POSTGRES_PASSWORD: test-postgres-password-not-for-production
-          REDIS_PASSWORD: test-redis-password-not-for-production
-      - name: Start docker-compose services
-        run: docker compose up -d postgres redis
       - name: Wait for services
         run: |
-          for i in $(seq 1 30); do nc -z localhost 15432 && break; sleep 1; done
+          for i in $(seq 1 30); do nc -z localhost 5432 && break; sleep 1; done
           for i in $(seq 1 30); do nc -z localhost 6379 && break; sleep 1; done
       - name: Run database migrations
         run: cd backend && npx prisma migrate deploy
         env:
-          DATABASE_URL: postgresql://postgres:test-postgres-password-not-for-production@localhost:15432/cinematicai
+          DATABASE_URL: postgresql://postgres:test-postgres-password-not-for-production@localhost:5432/cinematicai
       - name: Run HNSW index tests
         run: cd backend && npm run test:hnsw
         env:
-          DATABASE_URL: postgresql://postgres:test-postgres-password-not-for-production@localhost:15432/cinematicai
-          REDIS_URL: redis://:test-redis-password-not-for-production@localhost:6379
+          DATABASE_URL: postgresql://postgres:test-postgres-password-not-for-production@localhost:5432/cinematicai
+          REDIS_URL: redis://localhost:6379
 
   backend:
     runs-on: ubuntu-latest
@@ -207,13 +211,14 @@ jobs:
           cd backend
           npx eslint src --no-error-on-unmatched-pattern --format json | tee eslint-results.json
 
+      # Leave base/head unset: the action derives them from the event. Pushes
+      # use event.before/after (handling the all-zero first push) and PRs use
+      # the PR SHAs. Passing the default branch as base made pushes to that
+      # branch compare a commit against itself and fail.
       - name: Secret scanning
         uses: trufflesecurity/trufflehog@f446421baf832d6356c42c1743d99abff52ff334
         with:
           path: ./
-          base: ${{ github.event.repository.default_branch }}
-          head: ${{ github.sha }}
-          no-fork: true
 
       - name: Dependency vulnerability scan
         uses: aquasecurity/trivy-action@cf5c088a69634cd13ccddc735d7926162c31f9a6
@@ -277,9 +282,6 @@ jobs:
         uses: trufflesecurity/trufflehog@f446421baf832d6356c42c1743d99abff52ff334
         with:
           path: ./
-          base: ${{ github.event.repository.default_branch }}
-          head: ${{ github.sha }}
-          no-fork: true
       - name: Build
         run: npm run build
       - name: Verify frontend build artifacts are up to date
